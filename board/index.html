@@ -1,0 +1,529 @@
+<title>GTA 6 Launch Board</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,500..800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: sticky header with launch countdown, then a horizontally scrolling row of five columns; a dialog holds the full ticket brief. */
+:root {
+  --bg: #F4F2F7;
+  --col: #EAE6F0;
+  --surface: #FFFFFF;
+  --ink: #1B1624;
+  --muted: #655D71;
+  --line: #D9D2E2;
+  --accent: #D1335D;
+  --accent-ink: #FFFFFF;
+  --accent-soft: #FBE3EA;
+  --research: #0F7A76;
+  --script: #C02E57;
+  --production: #A2610A;
+  --publishing: #2A63C4;
+  --build: #4A7424;
+  --warn: #B4400F;
+  --display: "Archivo", "Arial Narrow", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #13101A; --col: #1A1622; --surface: #221D2C; --ink: #EEE9F4; --muted: #A59CB2; --line: #332C3F;
+    --accent: #FF5F88; --accent-ink: #1B0710; --accent-soft: #3A1826;
+    --research: #3FC6BF; --script: #FF7598; --production: #F2A83C; --publishing: #74A7F7; --build: #9DCB6A; --warn: #FF8A55;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #13101A; --col: #1A1622; --surface: #221D2C; --ink: #EEE9F4; --muted: #A59CB2; --line: #332C3F;
+  --accent: #FF5F88; --accent-ink: #1B0710; --accent-soft: #3A1826;
+  --research: #3FC6BF; --script: #FF7598; --production: #F2A83C; --publishing: #74A7F7; --build: #9DCB6A; --warn: #FF8A55;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 14px; line-height: 1.45;
+  display: flex; flex-direction: column;
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.gutter { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+
+header {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg);
+  padding-block: 18px 14px; border-bottom: 1px solid var(--line);
+  display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 14px 24px;
+}
+.brand { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+h1 {
+  margin: 0; font-family: var(--display); font-weight: 800; font-stretch: 72%; font-size: clamp(28px, 5vw, 40px);
+  line-height: .95; letter-spacing: -.01em; text-transform: uppercase; text-wrap: balance;
+}
+h1 em { font-style: normal; color: var(--accent); }
+.countdown { display: flex; align-items: baseline; gap: 10px; }
+.countdown .days {
+  font-family: var(--display); font-weight: 800; font-stretch: 62%; font-size: 44px; line-height: .9;
+  color: var(--accent); font-variant-numeric: tabular-nums;
+}
+.countdown .label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); }
+.countdown .label strong { color: var(--ink); font-weight: 600; font-size: 13px; }
+
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding-block: 12px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  font: 500 12px/1 var(--body); padding: 7px 10px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink); cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+}
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.chip .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.spacer { flex: 1; }
+button { font-family: var(--body); }
+.btn {
+  font: 600 13px/1 var(--body); padding: 9px 14px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink); cursor: pointer;
+}
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.danger { color: var(--warn); }
+.btn:disabled { opacity: .5; cursor: default; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.notice { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: var(--accent-soft); font-size: 13px; }
+.board-scroll { flex: 1; min-height: 0; overflow-x: auto; padding-bottom: 20px; }
+.board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(270px, 1fr); gap: 12px; min-width: min-content; align-items: start; }
+.column { background: var(--col); border-radius: var(--radius); display: flex; flex-direction: column; min-width: 0; max-width: 360px; }
+.column.over { outline: 2px dashed var(--accent); outline-offset: -2px; }
+.col-head { padding: 12px 12px 6px; display: flex; flex-direction: column; gap: 2px; }
+.col-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.col-title h2 {
+  margin: 0; font-family: var(--display); font-weight: 700; font-stretch: 85%; font-size: 15px;
+  letter-spacing: .04em; text-transform: uppercase;
+}
+.count { font-family: var(--mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.col-hint { font-size: 12px; color: var(--muted); }
+.cards { display: flex; flex-direction: column; gap: 8px; padding: 6px 8px 10px; min-height: 60px; }
+.empty-col { font-size: 12px; color: var(--muted); padding: 14px 6px; text-align: center; border: 1px dashed var(--line); border-radius: 8px; }
+
+.card {
+  text-align: left; width: 100%; background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 8px; padding: 10px 11px; cursor: grab; display: flex; flex-direction: column; gap: 8px;
+  box-shadow: 0 1px 0 var(--line);
+}
+.card:hover { border-color: var(--muted); }
+.card.dragging { opacity: .45; }
+.card-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.prio { font-family: var(--mono); font-size: 11px; font-weight: 500; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--line); }
+.prio.P1 { color: var(--accent); border-color: var(--accent); }
+.card-title { font-weight: 600; font-size: 14px; line-height: 1.3; }
+.card-meta { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 12px; color: var(--muted); }
+.agent { display: inline-flex; align-items: center; gap: 5px; font-weight: 500; }
+.agent::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--agent-color, var(--muted)); }
+.due { font-family: var(--mono); font-size: 11px; }
+.due.soon { color: var(--warn); font-weight: 500; }
+.needs-you { font-size: 11px; font-weight: 600; color: var(--production); }
+
+dialog {
+  width: min(720px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); padding: 0; border: 1px solid var(--line);
+  border-radius: 14px; background: var(--surface); color: var(--ink);
+}
+dialog::backdrop { background: rgb(10 6 16 / .55); }
+.dlg { display: flex; flex-direction: column; max-height: calc(100dvh - 26px); }
+.dlg-head { padding: 18px 20px 12px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+.dlg-head h3 { margin: 0; font-family: var(--display); font-weight: 750; font-stretch: 80%; font-size: 24px; line-height: 1.1; text-wrap: balance; }
+.dlg-body { padding: 16px 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+.dlg-foot { padding: 12px 20px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+.fact { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.fact span:first-child, .field label, .section h4 { font-family: var(--mono); font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.section { display: flex; flex-direction: column; gap: 4px; }
+.section h4 { margin: 0; font-weight: 500; }
+.section p { margin: 0; max-width: 65ch; white-space: pre-wrap; }
+.section ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; max-width: 65ch; }
+.section.human { background: var(--accent-soft); border-radius: 8px; padding: 10px 12px; }
+.notes { display: flex; flex-direction: column; gap: 6px; }
+.note { font-size: 13px; border-left: 2px solid var(--line); padding-left: 10px; white-space: pre-wrap; }
+.note time { display: block; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+select, input, textarea {
+  font: 400 14px/1.4 var(--body); color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 8px; padding: 8px 10px; width: 100%; min-width: 0;
+}
+textarea { resize: vertical; min-height: 70px; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.close { margin-left: auto; }
+.toast {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  background: var(--ink); color: var(--bg); padding: 9px 14px; border-radius: 8px; font-size: 13px; z-index: 20;
+}
+.board-empty { padding: 40px 16px; text-align: center; color: var(--muted); max-width: 46ch; margin: 0 auto; }
+@media (prefers-reduced-motion: no-preference) { .card { transition: border-color .15s, opacity .15s; } }
+</style>
+
+<header class="gutter">
+  <div class="brand">
+    <span class="eyebrow">Short-form content plan · TikTok, Shorts, Reels</span>
+    <h1>GTA 6 <em>Launch</em> Board</h1>
+  </div>
+  <div class="countdown" aria-live="polite">
+    <span class="days" id="days">--</span>
+    <span class="label"><strong id="days-label">days to launch</strong><span>Thu 19 Nov 2026 · consoles</span></span>
+  </div>
+</header>
+
+<main>
+  <div class="toolbar gutter">
+    <div class="chips" id="filters" role="group" aria-label="Filter by agent"></div>
+    <span class="spacer"></span>
+    <button class="btn primary" id="new-ticket" type="button">New ticket</button>
+  </div>
+  <div class="gutter"><p class="notice" id="notice" hidden></p></div>
+  <div class="board-scroll gutter">
+    <div class="board" id="board"></div>
+  </div>
+</main>
+
+<dialog id="dialog" aria-labelledby="dlg-title"><div class="dlg" id="dlg"></div></dialog>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script>
+const LAUNCH = new Date(2026, 10, 19);
+const COLUMNS = [
+  { id: "backlog", name: "Backlog", hint: "Drafted, not reviewed yet" },
+  { id: "review", name: "Your review", hint: "Read, edit, then approve" },
+  { id: "ready", name: "Ready for agent", hint: "Approved. Copy the brief to Claude" },
+  { id: "doing", name: "In progress", hint: "An agent or you is on it" },
+  { id: "done", name: "Done", hint: "Delivered and checked" },
+];
+const AGENTS = {
+  research: { name: "Research agent", color: "var(--research)" },
+  script: { name: "Script agent", color: "var(--script)" },
+  production: { name: "Production agent", color: "var(--production)" },
+  publishing: { name: "Publishing agent", color: "var(--publishing)" },
+  build: { name: "Coding agent", color: "var(--build)" },
+};
+const PHASES = ["Setup", "Pre-launch", "Launch week", "Post-launch"];
+const PRIORITIES = ["P1", "P2", "P3"];
+
+let db = null, canWrite = true, tickets = new Map(), filter = "all", openId = null, editing = false, loaded = false;
+const $ = (id) => document.getElementById(id);
+const el = (tag, attrs = {}, ...kids) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === "class") n.className = v;
+    else if (k === "text") n.textContent = v;
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat()) if (kid != null) n.append(kid);
+  return n;
+};
+
+function startOfToday() { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }
+function parseDate(s) { if (!s) return null; const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); }
+function fmtDate(s) {
+  const d = parseDate(s); if (!d) return "No date";
+  return d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+}
+function daysUntil(d) { return Math.round((d - startOfToday()) / 86400000); }
+
+function renderCountdown() {
+  const n = daysUntil(LAUNCH);
+  $("days").textContent = n > 0 ? n : "0";
+  $("days-label").textContent = n > 1 ? "days to launch" : n === 1 ? "day to launch" : "GTA 6 is out";
+}
+
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.hidden = false;
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => (t.hidden = true), 2200);
+}
+function notice(msg) { const n = $("notice"); n.textContent = msg || ""; n.hidden = !msg; }
+
+function renderFilters() {
+  const box = $("filters"); box.replaceChildren();
+  const make = (id, label, color) => el("button", {
+    class: "chip", type: "button", "aria-pressed": String(filter === id), style: color ? `color:${color}` : null,
+    onclick: () => { filter = id; renderFilters(); renderBoard(); },
+  }, color ? el("span", { class: "dot" }) : null, el("span", { text: label, style: "color:inherit" }));
+  box.append(make("all", "All agents"));
+  for (const [id, a] of Object.entries(AGENTS)) box.append(make(id, a.name, a.color));
+  for (const b of box.children) if (b.getAttribute("aria-pressed") === "true") b.style.color = "";
+}
+
+function sortedIn(col) {
+  return [...tickets.values()].filter((t) => t.column === col).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
+
+function renderBoard() {
+  const board = $("board"); board.replaceChildren();
+  if (loaded && tickets.size === 0) {
+    board.style.display = "block";
+    board.append(el("div", { class: "board-empty" },
+      el("p", { text: "No tickets yet. Use New ticket to add the first one, or ask Claude to load the GTA 6 content plan into this board." })));
+    return;
+  }
+  board.style.display = "";
+  for (const col of COLUMNS) {
+    const list = sortedIn(col.id);
+    const shown = list.filter((t) => filter === "all" || t.agent === filter);
+    const cards = el("div", { class: "cards", "data-col": col.id });
+    if (!loaded) cards.append(el("div", { class: "empty-col", text: "Loading tickets…" }));
+    else if (!shown.length) cards.append(el("div", { class: "empty-col", text: list.length ? "No tickets for this agent" : "Drop a ticket here" }));
+    for (const t of shown) cards.append(renderCard(t));
+    const column = el("section", { class: "column", "aria-label": col.name },
+      el("div", { class: "col-head" },
+        el("div", { class: "col-title" }, el("h2", { text: col.name }), el("span", { class: "count", text: String(list.length) })),
+        el("span", { class: "col-hint", text: col.hint })),
+      cards);
+    wireDrop(column, col.id);
+    board.append(column);
+  }
+}
+
+function renderCard(t) {
+  const a = AGENTS[t.agent];
+  const due = parseDate(t.due);
+  const soon = due && t.column !== "done" && daysUntil(due) <= 2;
+  const card = el("button", {
+    class: "card", type: "button", draggable: canWrite ? "true" : null, "data-id": t.id,
+    onclick: () => openTicket(t.id),
+  },
+    el("div", { class: "card-top" }, el("span", { text: t.key || t.id }), el("span", { class: "prio " + (t.priority || ""), text: t.priority || "P3" })),
+    el("div", { class: "card-title", text: t.title || "Untitled ticket" }),
+    el("div", { class: "card-meta" },
+      el("span", { class: "agent", style: `--agent-color:${a ? a.color : "var(--muted)"}`, text: a ? a.name : "No agent" }),
+      el("span", { class: "due" + (soon ? " soon" : ""), text: fmtDate(t.due) }),
+      t.human ? el("span", { class: "needs-you", text: "Needs you" }) : null));
+  card.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", t.id); e.dataTransfer.effectAllowed = "move"; card.classList.add("dragging"); });
+  card.addEventListener("dragend", () => card.classList.remove("dragging"));
+  return card;
+}
+
+function wireDrop(column, colId) {
+  column.addEventListener("dragover", (e) => { if (!canWrite) return; e.preventDefault(); column.classList.add("over"); });
+  column.addEventListener("dragleave", (e) => { if (!column.contains(e.relatedTarget)) column.classList.remove("over"); });
+  column.addEventListener("drop", (e) => {
+    e.preventDefault(); column.classList.remove("over");
+    const id = e.dataTransfer.getData("text/plain"); if (!tickets.has(id)) return;
+    const before = e.target.closest(".card");
+    moveTicket(id, colId, before && before.dataset.id !== id ? before.dataset.id : null);
+  });
+}
+
+function orderFor(colId, movingId, beforeId) {
+  const list = sortedIn(colId).filter((t) => t.id !== movingId);
+  if (beforeId) {
+    const i = list.findIndex((t) => t.id === beforeId);
+    if (i >= 0) {
+      const next = list[i].order ?? 0;
+      const prev = i > 0 ? (list[i - 1].order ?? 0) : next - 2;
+      return (prev + next) / 2;
+    }
+  }
+  return list.length ? (list[list.length - 1].order ?? 0) + 1 : 1;
+}
+
+async function write(id, data, doneMsg) {
+  if (!db) return false;
+  try {
+    await db.collection("tickets").doc(id).update(data);
+    if (doneMsg) toast(doneMsg);
+    return true;
+  } catch (e) { handleWriteError(e); return false; }
+}
+function handleWriteError(e) {
+  if (e && e.code === "invalid_argument") { canWrite = false; notice("This board is read-only for you. Only the owner can change tickets."); renderBoard(); }
+  else if (e && e.code === "quota_exceeded") notice("The board is full. Delete some finished tickets, then try again.");
+  else toast("That change didn't save. Check your connection and try again.");
+}
+
+async function moveTicket(id, colId, beforeId) {
+  const t = tickets.get(id); if (!t) return;
+  const order = orderFor(colId, id, beforeId);
+  if (t.column === colId && t.order === order) return;
+  const col = COLUMNS.find((c) => c.id === colId);
+  await write(id, { column: colId, order }, t.column === colId ? null : `Moved to ${col.name}`);
+}
+
+function brief(t) {
+  const a = AGENTS[t.agent];
+  const lines = [
+    `# ${t.key || t.id}: ${t.title}`, "",
+    "Project: short-form GTA 6 content for TikTok, YouTube Shorts and Instagram Reels. GTA 6 launches on consoles on Thursday 19 November 2026.",
+    `Agent role: ${a ? a.name : "Any"} · Phase: ${t.phase || "-"} · Priority: ${t.priority || "-"} · Due: ${t.due || "-"}`, "",
+    "## Goal", t.goal || "-", "",
+    "## Context", t.context || "-", "",
+    "## Deliverable", t.deliverable || "-", "",
+    "## Acceptance criteria", ...(t.acceptance && t.acceptance.length ? t.acceptance.map((x) => `- ${x}`) : ["-"]), "",
+    "## Out of scope", t.outOfScope || "-",
+  ];
+  if (t.human) lines.push("", "## Needs a human", t.human);
+  if (t.notes && t.notes.length) lines.push("", "## Review notes", ...t.notes.map((n) => `- ${n.text}`));
+  lines.push("", "If something in this brief is unclear or a fact can't be verified, say so in the output instead of guessing.");
+  return lines.join("\n");
+}
+
+async function copyBrief(t, btn) {
+  const text = brief(t);
+  try { await navigator.clipboard.writeText(text); toast("Brief copied. Paste it into Claude."); }
+  catch {
+    const ta = el("textarea", { readonly: true, "aria-label": "Agent brief" }); ta.value = text; ta.style.minHeight = "220px";
+    btn.closest(".dlg").querySelector(".dlg-body").prepend(ta); ta.select();
+    toast("Copy is blocked here. The brief is selected above, copy it manually.");
+  }
+}
+
+function openTicket(id) {
+  openId = id; editing = false; renderDialog();
+  const d = $("dialog"); if (!d.open) d.showModal();
+}
+function closeDialog() { $("dialog").close(); }
+$("dialog").addEventListener("close", () => { openId = null; editing = false; });
+$("dialog").addEventListener("click", (e) => { if (e.target === $("dialog")) closeDialog(); });
+
+function renderDialog() {
+  const box = $("dlg");
+  if (openId === "__new") { box.replaceChildren(...editForm(null)); return; }
+  const t = tickets.get(openId);
+  if (!t) { closeDialog(); return; }
+  box.replaceChildren(...(editing ? editForm(t) : viewTicket(t)));
+}
+
+function section(title, content, cls) {
+  if (!content || (Array.isArray(content) && !content.length)) return null;
+  return el("div", { class: "section" + (cls ? " " + cls : "") }, el("h4", { text: title }),
+    Array.isArray(content) ? el("ul", {}, content.map((x) => el("li", { text: x }))) : el("p", { text: content }));
+}
+
+function viewTicket(t) {
+  const a = AGENTS[t.agent];
+  const colSelect = el("select", { id: "move-col", "aria-label": "Column", disabled: !canWrite,
+    onchange: (e) => moveTicket(t.id, e.target.value, null) },
+    COLUMNS.map((c) => el("option", { value: c.id, selected: c.id === t.column, text: c.name })));
+  const noteInput = el("textarea", { id: "note-input", placeholder: "Add a review note, for example what to change before approving", rows: "2" });
+  const head = el("div", { class: "dlg-head" },
+    el("div", { class: "card-top" }, el("span", { text: `${t.key || t.id} · ${t.phase || "No phase"}` }),
+      el("button", { class: "btn close", type: "button", text: "Close", onclick: closeDialog })),
+    el("h3", { id: "dlg-title", text: t.title }),
+    el("div", { class: "facts" },
+      el("div", { class: "fact" }, el("span", { text: "Agent" }), el("span", { class: "agent", style: `--agent-color:${a ? a.color : "var(--muted)"}`, text: a ? a.name : "None" })),
+      el("div", { class: "fact" }, el("span", { text: "Due" }), el("span", { text: fmtDate(t.due) })),
+      el("div", { class: "fact" }, el("span", { text: "Priority" }), el("span", { text: t.priority || "-" })),
+      el("div", { class: "fact" }, el("span", { text: "Column" }), colSelect)));
+  const notes = (t.notes || []).map((n) => el("div", { class: "note" }, el("time", { text: n.at ? new Date(n.at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "" }), n.text));
+  const body = el("div", { class: "dlg-body" },
+    section("Goal", t.goal), section("Context", t.context), section("Deliverable", t.deliverable),
+    section("Acceptance criteria", t.acceptance), section("Out of scope", t.outOfScope),
+    section("Needs you", t.human, "human"),
+    el("div", { class: "section" }, el("h4", { text: "Review notes" }),
+      notes.length ? el("div", { class: "notes" }, notes) : el("p", { text: "No notes yet.", style: "color:var(--muted)" }),
+      canWrite ? noteInput : null,
+      canWrite ? el("div", {}, el("button", { class: "btn", type: "button", text: "Add note", onclick: async () => {
+        const text = noteInput.value.trim(); if (!text) return;
+        const ok = await write(t.id, { notes: [...(t.notes || []), { text, at: new Date().toISOString() }] }, "Note added");
+        if (ok) noteInput.value = "";
+      } })) : null));
+  const foot = el("div", { class: "dlg-foot" },
+    el("button", { class: "btn primary", type: "button", text: "Copy agent brief", onclick: (e) => copyBrief(t, e.currentTarget) }),
+    canWrite && t.column === "review" ? el("button", { class: "btn", type: "button", text: "Approve for agent", onclick: () => moveTicket(t.id, "ready", null) }) : null,
+    el("span", { class: "spacer" }),
+    canWrite ? el("button", { class: "btn", type: "button", text: "Edit ticket", onclick: () => { editing = true; renderDialog(); } }) : null);
+  return [head, body, foot];
+}
+
+function field(label, input) { return el("div", { class: "field" }, el("label", { for: input.id, text: label }), input); }
+
+function editForm(t) {
+  const v = t || { column: "backlog", agent: "research", priority: "P2", phase: "Pre-launch", acceptance: [] };
+  const inp = (id, value, type = "text") => { const i = el("input", { id, type }); i.value = value || ""; return i; };
+  const area = (id, value, rows = 3) => { const a = el("textarea", { id, rows: String(rows) }); a.value = value || ""; return a; };
+  const sel = (id, options, value) => el("select", { id }, options.map(([val, label]) => el("option", { value: val, selected: val === value, text: label })));
+  const f = {
+    title: inp("f-title", v.title),
+    agent: sel("f-agent", Object.entries(AGENTS).map(([k, a]) => [k, a.name]), v.agent),
+    priority: sel("f-priority", PRIORITIES.map((p) => [p, p]), v.priority),
+    phase: sel("f-phase", PHASES.map((p) => [p, p]), v.phase),
+    due: inp("f-due", v.due, "date"),
+    goal: area("f-goal", v.goal, 2),
+    context: area("f-context", v.context, 4),
+    deliverable: area("f-deliverable", v.deliverable, 3),
+    acceptance: area("f-acceptance", (v.acceptance || []).join("\n"), 4),
+    outOfScope: area("f-oos", v.outOfScope, 2),
+    human: area("f-human", v.human, 2),
+  };
+  const err = el("p", { class: "notice", hidden: true });
+  const save = async () => {
+    const title = f.title.value.trim();
+    if (!title) { err.textContent = "Give the ticket a title before saving."; err.hidden = false; f.title.focus(); return; }
+    const data = {
+      title, agent: f.agent.value, priority: f.priority.value, phase: f.phase.value, due: f.due.value,
+      goal: f.goal.value.trim(), context: f.context.value.trim(), deliverable: f.deliverable.value.trim(),
+      acceptance: f.acceptance.value.split("\n").map((s) => s.trim()).filter(Boolean),
+      outOfScope: f.outOfScope.value.trim(), human: f.human.value.trim(),
+    };
+    try {
+      if (t) { await db.collection("tickets").doc(t.id).update(data); toast("Ticket saved"); editing = false; renderDialog(); }
+      else {
+        const id = nextKey();
+        await db.collection("tickets").doc(id).set({ ...data, key: id, column: "backlog", order: orderFor("backlog", id, null), notes: [] });
+        toast("Ticket added to Backlog"); openId = id; editing = false;
+      }
+    } catch (e) { handleWriteError(e); }
+  };
+  const confirmBox = el("span", { hidden: true }, el("span", { text: "Delete for good? ", style: "font-size:13px" }),
+    el("button", { class: "btn danger", type: "button", text: "Yes, delete", onclick: async () => {
+      try { await db.collection("tickets").doc(t.id).delete(); toast("Ticket deleted"); closeDialog(); } catch (e) { handleWriteError(e); }
+    } }));
+  const head = el("div", { class: "dlg-head" },
+    el("div", { class: "card-top" }, el("span", { text: t ? `Editing ${t.key || t.id}` : "New ticket" }),
+      el("button", { class: "btn close", type: "button", text: "Cancel", onclick: () => { if (t) { editing = false; renderDialog(); } else closeDialog(); } })),
+    el("h3", { id: "dlg-title", text: t ? t.title : "Write a ticket an agent can act on" }));
+  const body = el("div", { class: "dlg-body" }, err,
+    field("Title", f.title),
+    el("div", { class: "grid-2" }, field("Agent", f.agent), field("Priority", f.priority), field("Phase", f.phase), field("Due", f.due)),
+    field("Goal: one sentence on the outcome", f.goal),
+    field("Context: what the agent needs to know", f.context),
+    field("Deliverable: what it hands back", f.deliverable),
+    field("Acceptance criteria: one per line", f.acceptance),
+    field("Out of scope", f.outOfScope),
+    field("Needs you: what only you can do", f.human));
+  const foot = el("div", { class: "dlg-foot" },
+    el("button", { class: "btn primary", type: "button", text: t ? "Save changes" : "Add ticket", onclick: save }),
+    el("span", { class: "spacer" }),
+    t ? el("button", { class: "btn danger", type: "button", text: "Delete ticket", onclick: (e) => { e.currentTarget.hidden = true; confirmBox.hidden = false; } }) : null,
+    confirmBox);
+  return [head, body, foot];
+}
+
+function nextKey() {
+  let max = 0;
+  for (const t of tickets.values()) { const m = /^GTA-(\d+)$/.exec(t.key || t.id); if (m) max = Math.max(max, Number(m[1])); }
+  return "GTA-" + String(max + 1).padStart(2, "0");
+}
+
+$("new-ticket").addEventListener("click", () => {
+  if (!db) { toast("The board can't save right now."); return; }
+  openId = "__new"; editing = true; renderDialog(); $("dialog").showModal();
+});
+
+async function boot() {
+  renderCountdown(); renderFilters(); renderBoard();
+  setInterval(renderCountdown, 60000);
+  if (!window.claude || typeof window.claude.use !== "function") {
+    loaded = true; notice("Open this board on claude.ai while signed in to load and save tickets."); renderBoard(); return;
+  }
+  db = await window.claude.use("db");
+  if (!db) { loaded = true; $("new-ticket").disabled = true; notice("Tickets can't load in this view. Open the board on claude.ai while signed in."); renderBoard(); return; }
+  try {
+    const user = await window.claude.use("user");
+    const can = user ? await user.can("data.write") : null;
+    if (can === false) { canWrite = false; $("new-ticket").hidden = true; notice("You're viewing this board read-only."); }
+  } catch {}
+  db.collection("tickets").onSnapshot((snap) => {
+    tickets = new Map(snap.docs.map((d) => [d.id, { id: d.id, ...d.data() }]));
+    loaded = true; renderBoard();
+    if (openId && !editing) renderDialog();
+  }, (e) => { loaded = true; notice(e && e.code === "revoked" ? "Access to this board changed. Reload to continue." : "Live updates stopped. Reload the page to reconnect."); renderBoard(); });
+}
+boot();
+</script>
