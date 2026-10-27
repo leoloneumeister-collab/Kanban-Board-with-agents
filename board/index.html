@@ -32,6 +32,7 @@
       <div class="actions">
         <button class="btn primary" id="run-all" type="button">Run ready tickets</button>
         <button class="btn" id="stop-all" type="button" hidden>Stop agents</button>
+        <button class="btn" id="run-selected" type="button" hidden>Run selected</button>
         <span class="muted small" id="k-left"></span>
       </div>
       <div class="proposal-inline" id="run-confirm" hidden></div>
@@ -62,6 +63,7 @@
       <option value="priority">Priority</option>
       <option value="agent">Agent</option>
     </select>
+    <button class="btn" id="select-mode" type="button" aria-pressed="false">Select tickets</button>
     <button class="btn primary" id="new-ticket" type="button">New ticket</button>
   </div>
   <div class="gutter"><p class="notice" id="notice" hidden></p></div>

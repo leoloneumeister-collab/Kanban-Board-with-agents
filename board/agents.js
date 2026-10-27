@@ -273,14 +273,119 @@ async function runQueue(ids) {
   S.runAllActive = false; status(); renderDeck();
   toast(S.stopAll ? `Stopped. ${done} finished.` : `${done} ticket${done === 1 ? "" : "s"} ready to check${failed ? `, ${failed} failed` : ""}`);
 }
-async function requestRunAll() {
-  const ids = sortedIn("ready").map((t) => t.id);
+/* Scheduler: only unblocked tickets, highest priority and earliest due first. Dependents wait until you approve what they depend on. */
+function runnable(ids) {
+  return ids.map((id) => S.tickets.get(id)).filter((t) => t && t.column === "ready" && !blockedBy(t).length && !(t.cloud && t.cloud.status === "working"))
+    .sort((a, b) => (PRIO_RANK[a.priority] || 9) - (PRIO_RANK[b.priority] || 9) || (a.due || "9").localeCompare(b.due || "9") || (a.order ?? 0) - (b.order ?? 0))
+    .map((t) => t.id);
+}
+function readyScope() { return sortedIn("ready").filter((t) => S.filter === "all" || t.agent === S.filter).map((t) => t.id); }
+async function requestRunAll(scopeIds) {
+  const scope = scopeIds || readyScope();
+  const ids = runnable(scope);
+  const blocked = scope.length - ids.length;
+  if (blocked) toast(`${blocked} ticket${blocked === 1 ? " is" : "s are"} waiting on other tickets and will be skipped.`);
   if (!ids.length) return;
   await readUsage();
   const left = runsLeft();
   if (left <= 0) { notice(sampleError({ code: "cap_reached" })); return; }
   if (ids.length > left) { S.confirmRun = { ids, left }; renderDeck(); return; }
-  runQueue(ids);
+  startRuns(ids);
+}
+function startRuns(ids) { if (S.settings.runWhere === "cloud" && S.mcp) sendManyToCloud(ids); else runQueue(ids); }
+
+/* ---------- cloud agents (Claude Code sessions) ---------- */
+function mcpError(e) {
+  const c = e && e.code;
+  if (c === "server_not_connected") return "Claude Code isn't connected for this board. Open the board on claude.ai and allow the Claude Code Remote connector.";
+  if (c === "needs_reauth") return "Your Claude Code connection expired. Reconnect it in claude.ai settings.";
+  if (c === "approval_required" || c === "not_granted") return "This board needs your permission to start Claude Code sessions. Allow it when claude.ai asks.";
+  if (c === "not_in_manifest") return "This board isn't allowed to use that Claude Code action.";
+  if (c === "blocked_by_policy") return "Your organization blocks this connector.";
+  if (c === "tool_error") return "Claude Code refused the request. " + String((e && e.message) || "").slice(0, 160);
+  return "Couldn't reach Claude Code. Try again in a minute.";
+}
+async function cloudEnv() {
+  if (S.settings.cloudEnv) return S.settings.cloudEnv;
+  const r = await S.mcp.callTool(CLOUD, "list_environments", { limit: 20 }, { cache: false });
+  const envs = (r && r.payload && r.payload.environments) || [];
+  const env = envs.find((e) => e.state === "active") || envs[0];
+  if (!env) throw { code: "tool_error", message: "No Claude Code environment found. Create one at claude.ai/code." };
+  return env.environment_id;
+}
+function cloudPrompt(t, chatList, stamp) {
+  const depText = depOutputs(t);
+  const id = t.id;
+  return [
+    `You are working one ticket from the creator's GTA 6 content Kanban board. ${PROJECT} Today is ${todayISO()}.`,
+    (AGENTS[t.agent] || {}).role || "",
+    "You CAN browse the web in this session. Verify facts and cite real sources with links. Only mark something [verify] if you truly couldn't confirm it.",
+    "Write for a beginner creator: plain language, short sentences, no filler. Follow the acceptance criteria exactly.",
+    GUARD, "",
+    dataBlock("PROJECT MEMORY", memoryText()), "",
+    dataBlock("TICKET", brief(t)),
+    depText ? "\n" + depText : "",
+    chatList && chatList.length ? "\n" + dataBlock("CONVERSATION WITH THE CREATOR", chatDigest(chatList)) : "",
+    "",
+    "WHEN THE DELIVERABLE IS READY, hand it back to the board for the creator to approve. Do NOT edit the ticket itself.",
+    `1. Use the ArtifactData tool with url ${ARTIFACT_URL}: action "set", collection "tickets/${id}/proposals", doc_id "cloud-${stamp}", data {"kind": "result", "data": {"output": <the full deliverable as Markdown>}, "old": {}, "why": "Written by a Claude Code cloud session with web access", "status": "pending", "at": <current ISO time>}.`,
+    `2. Read collection "tickets" doc_id "${id}", then "update" it with data {"pendingProposals": <its current pendingProposals or 0, plus 1>, "cloud": {"sessionDone": true}} pinned with if_version.`,
+    `3. If ArtifactData isn't available, commit the deliverable to results/${id}.md in ${REPO_URL} on a new branch claude/result-${id.toLowerCase()} and push it. Don't open a pull request.`,
+    "Then finish with a 3-line summary.",
+  ].join("\n");
+}
+async function sendToCloud(id) {
+  const t = S.tickets.get(id);
+  if (!t || !S.mcp) return { ok: false };
+  await readUsage();
+  if (runsLeft() <= 0) { toast(sampleError({ code: "cap_reached" })); return { ok: false, code: "cap_reached" }; }
+  let chatList = [];
+  try { chatList = (await S.db.collection(`tickets/${id}/messages`).orderBy("at").limit(300).get()).docs.map((d) => d.data()); } catch {}
+  const stamp = Date.now().toString(36);
+  try {
+    const environment_id = await cloudEnv();
+    const r = await S.mcp.callTool(CLOUD, "create_session", { environment_id, title: `${t.key || t.id}: ${t.title}`.slice(0, 200), prompt: cloudPrompt(t, chatList, stamp), source_url: REPO_URL }, { cache: false });
+    const p = (r && r.payload) || {};
+    const sessionId = p.session_id || p.id || (p.session && (p.session.id || p.session.session_id));
+    if (!sessionId) throw { code: "tool_error", message: "Claude Code didn't return a session id." };
+    await countRun();
+    await write(id, { column: "doing", order: orderFor("doing", id, null), cloud: { sessionId, status: "working", at: new Date().toISOString(), stamp }, run: { status: "cloud", at: new Date().toISOString() } }, "Sent to Claude Code");
+    addEvent(id, "Sent to a Claude Code cloud session. Its result will arrive as a proposal on the Result tab.");
+    return { ok: true };
+  } catch (e) {
+    const msg = mcpError(e); toast(msg); addEvent(id, "Couldn't start a cloud session: " + msg);
+    return { ok: false, code: e && e.code };
+  }
+}
+async function sendManyToCloud(ids) {
+  S.runAllActive = true; renderDeck();
+  let ok = 0;
+  for (const id of ids) {
+    const r = await sendToCloud(id);
+    if (r.ok) ok++;
+    if (!r.ok && r.code && r.code !== "tool_error") break;
+    $("run-status").textContent = `${ok} of ${ids.length} sent to Claude Code`;
+  }
+  S.runAllActive = false; renderDeck();
+  $("run-status").textContent = ok ? `${ok} cloud session${ok === 1 ? "" : "s"} working. Results arrive as proposals; you can close this tab.` : "";
+}
+async function refreshCloud(ids) {
+  if (!S.mcp) return;
+  const list = (ids || [...S.tickets.values()].filter((t) => t.cloud && t.cloud.status === "working").map((t) => t.id));
+  for (const id of list) {
+    const t = S.tickets.get(id); if (!t || !t.cloud) continue;
+    try {
+      const r = await S.mcp.callTool(CLOUD, "get_session", { session_id: t.cloud.sessionId }, { cache: false });
+      const p = (r && r.payload) || {};
+      const bucket = p.status_bucket || (p.session && p.session.status_bucket) || p.status || "unknown";
+      S.cloudStatus.set(id, { bucket: String(bucket), checked: new Date().toISOString() });
+      if ((bucket === "completed" || bucket === "review_ready" || bucket === "failed") && t.column === "doing" && (t.pendingProposals || t.cloud.sessionDone || bucket === "failed")) {
+        const failed = bucket === "failed" && !t.pendingProposals;
+        await write(id, { cloud: { ...t.cloud, status: failed ? "failed" : "done" }, column: failed ? "ready" : "check", order: orderFor(failed ? "ready" : "check", id, null), run: { status: failed ? "error" : "done", at: new Date().toISOString(), message: failed ? "The cloud session failed. Open it to see why." : "" } });
+      }
+    } catch (e) { S.cloudStatus.set(id, { bucket: "unknown", error: mcpError(e) }); }
+  }
+  renderAll();
 }
 
 /* ---------- smart sort ---------- */

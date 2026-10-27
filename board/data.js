@@ -21,7 +21,10 @@ const PRIORITIES = ["P1", "P2", "P3"];
 const PRIO_RANK = { P1: 1, P2: 2, P3: 3 };
 const EDITABLE = ["title", "goal", "context", "deliverable", "acceptance", "outOfScope", "human", "priority", "due", "agent", "phase"];
 const FIELD_NAMES = { title: "Title", goal: "Goal", context: "Context", deliverable: "Deliverable", acceptance: "Acceptance criteria", outOfScope: "Out of scope", human: "Needs you", priority: "Priority", due: "Due date", agent: "Agent", phase: "Phase", column: "Column", output: "Result", dependsOn: "Depends on" };
-const DEFAULT_SETTINGS = { dailyRunCap: 10, autoReview: true };
+const DEFAULT_SETTINGS = { dailyRunCap: 10, autoReview: true, runWhere: "browser" };
+const ARTIFACT_URL = "https://claude.ai/artifact/PrT4ANqepTNYh5qMtN6WLA";
+const REPO_URL = "https://github.com/leoloneumeister-collab/Kanban-Board-with-agents";
+const CLOUD = "Claude Code Remote";
 const MEMORY_FIELDS = [
   ["angle", "Channel angle", "The one angle every video serves, for example beginner guides for returning players"],
   ["audience", "Audience", "Who watches and what they want"],
@@ -40,6 +43,7 @@ const S = {
   messages: [], proposals: [], history: [], subs: [], subFor: null,
   chatCtl: null, chatPending: null, chatBusy: false,
   activeRuns: new Map(), runAllActive: false, stopAll: false, confirmRun: null,
+  mcp: null, cloudStatus: new Map(), selecting: false, selected: new Set(),
 };
 
 const $ = (id) => document.getElementById(id);

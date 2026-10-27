@@ -39,18 +39,23 @@ function renderDeck() {
   $("k-you").textContent = needYou;
   $("k-run").textContent = S.activeRuns.size;
   $("k-left").textContent = `${runsLeft()} of ${S.settings.dailyRunCap} runs left today`;
-  const ready = ticketsIn("ready").length;
+  const scope = readyScope(); const ready = runnable(scope).length;
+  const where = S.settings.runWhere === "cloud" && S.mcp ? " in the cloud" : "";
   const runBtn = $("run-all");
-  runBtn.textContent = ready ? `Run ${ready} ready ticket${ready === 1 ? "" : "s"}` : "Run ready tickets";
+  runBtn.textContent = ready ? `Run ${ready} ready${S.filter !== "all" ? " " + AGENTS[S.filter].name.toLowerCase() : ""} ticket${ready === 1 ? "" : "s"}${where}` : "Run ready tickets";
+  const selBtn = $("run-selected");
+  selBtn.hidden = !S.selecting; selBtn.textContent = `Run ${S.selected.size} selected${where}`; selBtn.disabled = !S.selected.size || S.runAllActive || !S.canWrite;
+  $("select-mode").textContent = S.selecting ? "Done selecting" : "Select tickets";
+  $("select-mode").setAttribute("aria-pressed", String(S.selecting));
   runBtn.disabled = !S.sample || !S.canWrite || S.runAllActive || !ready;
-  runBtn.title = !S.sample ? "Claude isn't available in this view" : !ready ? "Approve tickets into Ready for agent first" : "";
+  runBtn.title = !S.sample ? "Claude isn't available in this view" : !ready ? (scope.length ? "Every ready ticket is waiting on another ticket" : "Approve tickets into Ready for agent first") : "";
   $("stop-all").hidden = S.activeRuns.size === 0;
   const conf = $("run-confirm");
   if (S.confirmRun) {
     const { ids, left } = S.confirmRun;
     conf.hidden = false;
     conf.replaceChildren(el("span", { text: `${ids.length} tickets are ready, but only ${left} run${left === 1 ? "" : "s"} are left today.` }),
-      el("button", { class: "btn sm primary", type: "button", text: `Run the first ${left}`, onclick: () => { S.confirmRun = null; runQueue(ids.slice(0, left)); } }),
+      el("button", { class: "btn sm primary", type: "button", text: `Run the first ${left}`, onclick: () => { S.confirmRun = null; startRuns(ids.slice(0, left)); } }),
       el("button", { class: "btn sm", type: "button", text: "Cancel", onclick: () => { S.confirmRun = null; renderDeck(); } }));
   } else conf.hidden = true;
   $("smart-sort").disabled = !S.sample || !S.canWrite || !total;
@@ -124,7 +129,13 @@ function renderSettings() {
   const box = $("settings-body"); if (!box) return;
   const cap = el("input", { id: "set-cap", type: "number", min: "0", max: "200", value: String(S.settings.dailyRunCap) });
   const rev = el("input", { id: "set-review", type: "checkbox", checked: !!S.settings.autoReview, disabled: !S.canWrite, onchange: (e) => saveSettings({ autoReview: e.target.checked }) });
+  const whereOpt = (val, label, hint) => el("label", { class: "verify-item", for: "where-" + val },
+    el("input", { type: "radio", name: "run-where", id: "where-" + val, value: val, checked: S.settings.runWhere === val, disabled: !S.canWrite || (val === "cloud" && !S.mcp),
+      onchange: () => saveSettings({ runWhere: val }) }), el("span", {}, el("strong", { text: label }), " · " + hint));
   box.replaceChildren(
+    el("div", { class: "field" }, el("span", { class: "label-sm", text: "Where agents run" }),
+      whereOpt("browser", "In this tab", "2 at a time, no web access, keep the tab open"),
+      whereOpt("cloud", "Claude Code cloud", S.mcp ? "many at once, web access, results arrive as proposals" : "not available in this view")),
     el("label", { class: "verify-item", for: "set-review" }, rev, el("span", { text: "Reviewer agent checks every result and asks for one revision if it falls short. A run then uses up to 4 Claude requests instead of 1." })),
     el("div", { class: "field" }, el("label", { for: "set-cap", text: "Agent runs per day" }), cap,
       el("span", { class: "muted", style: "font-size:12px", text: "Stops runs once reached, to protect your Claude usage. Chat isn't counted." })),
@@ -160,9 +171,11 @@ function renderBoard() {
 }
 function cardFlags(t) {
   const f = [];
-  if (S.activeRuns.has(t.id)) f.push(el("span", { class: "flag run pulse", text: "Working…" }));
+  const cs = S.cloudStatus.get(t.id);
+  if (t.cloud && t.cloud.status === "working") f.push(el("span", { class: "flag run pulse", text: cs && cs.bucket && cs.bucket !== "unknown" ? `Claude Code: ${cs.bucket.replace("_", " ")}` : "In Claude Code" }));
+  else if (S.activeRuns.has(t.id)) f.push(el("span", { class: "flag run pulse", text: "Working…" }));
   else if (t.run && t.run.status === "error") f.push(el("span", { class: "flag err", text: "Agent failed" }));
-  else if (t.column === "doing") f.push(el("span", { class: "flag err", text: "Interrupted" }));
+  else if (t.column === "doing" && !(t.cloud && t.cloud.status === "working")) f.push(el("span", { class: "flag err", text: "Interrupted" }));
   else if (t.output && t.column === "check") f.push(el("span", { class: "flag ok", text: verifyOpen(t) ? `${verifyOpen(t)} to verify` : "Result ready" }));
   const blk = t.column !== "done" ? blockedBy(t) : [];
   if (blk.length) f.push(el("span", { class: "flag err", text: `Blocked by ${blk.map((d) => d.key || d.id).join(", ")}` }));
@@ -172,7 +185,14 @@ function cardFlags(t) {
 function renderCard(t) {
   const a = AGENTS[t.agent]; const due = parseDate(t.due);
   const soon = due && t.column !== "done" && daysUntil(due) <= 2;
-  const card = el("button", { class: "card" + (S.activeRuns.has(t.id) ? " working" : ""), type: "button", draggable: S.canWrite ? "true" : null, "data-id": t.id, onclick: () => openTicket(t.id) },
+  const sel = S.selecting && S.selected.has(t.id);
+  const card = el("button", { class: "card" + (S.activeRuns.has(t.id) ? " working" : "") + (sel ? " selected" : ""), type: "button", draggable: S.canWrite && !S.selecting ? "true" : null, "data-id": t.id,
+    "aria-pressed": S.selecting ? String(sel) : null,
+    onclick: () => {
+      if (!S.selecting) return openTicket(t.id);
+      if (t.column !== "ready") { toast("Only tickets in Ready for agent can be run."); return; }
+      S.selected.has(t.id) ? S.selected.delete(t.id) : S.selected.add(t.id); renderDeck(); renderBoard();
+    } },
     el("div", { class: "card-top" }, el("span", { text: t.key || t.id }), el("span", { class: "prio " + (t.priority || ""), text: t.priority || "P3" })),
     el("div", { class: "card-title", text: t.title || "Untitled ticket" }),
     el("div", { class: "card-meta" },
@@ -379,12 +399,22 @@ function resultTab(t) {
       t.run && t.run.status === "error" ? el("p", { class: "notice", style: "margin:0", text: t.run.message || "The last run failed." }) : null));
   }
   const open = verifyOpen(t);
-  const stuck = !run && t.column === "doing";
+  const inCloud = t.cloud && t.cloud.status === "working";
+  const stuck = !run && t.column === "doing" && !inCloud;
+  if (t.cloud && t.cloud.sessionId) {
+    const cs = S.cloudStatus.get(t.id);
+    body.prepend(el("div", { class: "proposal-inline" },
+      el("span", { text: inCloud ? `A Claude Code session is working on this${cs && cs.bucket ? ` (${cs.bucket.replace("_", " ")})` : ""}. Its result arrives here as a proposal.` : `Last cloud session: ${t.cloud.status}.` }),
+      el("a", { href: `https://claude.ai/code/${t.cloud.sessionId}`, target: "_blank", rel: "noopener noreferrer", text: "Open session" }),
+      inCloud && S.mcp ? el("button", { class: "btn sm", type: "button", text: "Check status", onclick: () => refreshCloud([t.id]) }) : null,
+      cs && cs.error ? el("span", { class: "muted", text: cs.error }) : null));
+  }
   const blk = blockedBy(t);
   if (!run && blk.length && t.column !== "done") body.prepend(el("p", { class: "notice", style: "margin:0", text: `Waiting on ${blk.map((d) => d.key || d.id).join(", ")}. You can run it now, but the agent won't have their results.` }));
   const foot = el("div", { class: "dlg-foot" },
     run ? el("button", { class: "btn", type: "button", text: "Stop", onclick: () => run.ctl.abort() })
-      : el("button", { class: "btn primary", type: "button", text: t.output ? "Run again" : "Run agent", disabled: !S.sample || !S.canWrite || stuck, onclick: () => runAgent(t.id) }),
+      : el("button", { class: "btn primary", type: "button", text: t.output ? "Run again" : "Run agent", disabled: !S.sample || !S.canWrite || stuck || inCloud, onclick: () => runAgent(t.id) }),
+    !run && S.mcp && S.canWrite && !inCloud && t.column !== "done" ? el("button", { class: "btn", type: "button", text: "Send to Claude Code", title: "Runs in a cloud session with web access", onclick: (e) => { e.currentTarget.disabled = true; sendToCloud(t.id); } }) : null,
     stuck && S.canWrite ? el("button", { class: "btn", type: "button", text: "Reset interrupted run", onclick: () => write(t.id, { column: "ready", order: orderFor("ready", t.id, null), run: { status: "stopped", at: new Date().toISOString() } }, "Moved back to Ready for agent") }) : null,
     !run && t.output && S.canWrite && t.column !== "done" ? el("button", { class: "btn", type: "button", text: open ? `Approve (${open} to verify)` : "Approve result", disabled: open > 0, title: open ? "Tick every [verify] item first" : "", onclick: async () => {
       if (await moveTicket(t.id, "done", null) && t.agent === "research" && S.sample) suggestMemory(S.tickets.get(t.id) || t);
@@ -477,7 +507,9 @@ $("new-ticket").addEventListener("click", () => {
   unsubscribeTicket(); S.openId = "__new"; S.editing = true; renderDialog(); if (!$("dialog").open) $("dialog").showModal();
 });
 $("sort-mode").addEventListener("change", (e) => { S.sortMode = e.target.value; renderBoard(); });
-$("run-all").addEventListener("click", requestRunAll);
+$("run-all").addEventListener("click", () => requestRunAll());
+$("run-selected").addEventListener("click", () => { const ids = [...S.selected]; S.selected.clear(); S.selecting = false; renderBoard(); requestRunAll(ids); });
+$("select-mode").addEventListener("click", () => { S.selecting = !S.selecting; if (!S.selecting) S.selected.clear(); renderDeck(); renderBoard(); });
 $("stop-all").addEventListener("click", () => { S.stopAll = true; for (const r of S.activeRuns.values()) r.ctl.abort(); });
 $("smart-sort").addEventListener("click", smartSort);
 window.addEventListener("beforeunload", (e) => { if (S.activeRuns.size || S.chatBusy) { e.preventDefault(); e.returnValue = ""; } });
@@ -488,8 +520,8 @@ async function boot() {
   if (!window.claude || typeof window.claude.use !== "function") {
     S.loaded = true; notice("Open this board on claude.ai while signed in to load tickets and use Claude."); renderAll(); return;
   }
-  const [db, sample, user, downloads] = await Promise.all(["db", "sample", "user", "downloads"].map((n) => window.claude.use(n)));
-  S.db = db; S.sample = sample; S.downloads = downloads;
+  const [db, sample, user, downloads, mcp] = await Promise.all(["db", "sample", "user", "downloads", "mcp"].map((n) => window.claude.use(n)));
+  S.db = db; S.sample = sample; S.downloads = downloads; S.mcp = mcp;
   if (sample) { try { const lim = await sample.limits(); S.toolsOk = !!(lim && lim.tools); } catch { S.toolsOk = false; } }
   if (!db) { S.loaded = true; $("new-ticket").disabled = true; notice("Tickets can't load in this view. Open the board on claude.ai while signed in."); renderAll(); return; }
   try { const can = user ? await user.can("data.write") : null; if (can === false) { S.canWrite = false; $("new-ticket").hidden = true; notice("You're viewing this board read-only."); } } catch {}
@@ -503,6 +535,7 @@ async function boot() {
   db.doc("meta/memory").onSnapshot((snap) => { S.memory = snap.exists ? snap.data() : null; if (!S.memoryEditing) renderMemory(); }, () => {});
   db.doc("meta/memoryProposal").onSnapshot((snap) => { S.memoryProposal = snap.exists ? snap.data() : null; if (!S.memoryEditing) renderMemory(); }, () => {});
   db.doc("meta/settings").onSnapshot((snap) => { S.settings = { ...DEFAULT_SETTINGS, ...(snap.exists ? snap.data() : {}) }; renderDeck(); renderSettings(); }, () => {});
-  await readUsage(); renderDeck();
+  await readUsage(); renderDeck(); renderSettings();
+  if (S.mcp && [...S.tickets.values()].some((t) => t.cloud && t.cloud.status === "working")) refreshCloud();
 }
 boot();
