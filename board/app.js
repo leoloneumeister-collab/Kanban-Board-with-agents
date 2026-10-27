@@ -35,7 +35,7 @@ function renderDeck() {
   }
   const open = [...S.tickets.values()].filter((t) => t.column !== "done");
   const dueSoon = open.filter((t) => { const d = parseDate(t.due); return d && daysUntil(d) <= 3; }).length;
-  const needYou = open.filter((t) => t.human || t.column === "review" || t.column === "check" || t.pendingProposals).length;
+  const needYou = open.filter((t) => t.column === "check" || t.pendingProposals || questionsOpen(t)).length;
   $("k-due").textContent = dueSoon; $("kpi-due").classList.toggle("alert", dueSoon > 0);
   $("k-you").textContent = needYou;
   $("k-run").textContent = S.activeRuns.size;
@@ -133,7 +133,12 @@ function renderSettings() {
   const whereOpt = (val, label, hint) => el("label", { class: "verify-item", for: "where-" + val },
     el("input", { type: "radio", name: "run-where", id: "where-" + val, value: val, checked: S.settings.runWhere === val, disabled: !S.canWrite || (val === "cloud" && !S.mcp),
       onchange: () => saveSettings({ runWhere: val }) }), el("span", {}, el("strong", { text: label }), " · " + hint));
+  const ap = el("input", { id: "set-autopilot", type: "checkbox", checked: S.settings.autopilot !== false, disabled: !S.canWrite, onchange: (e) => saveSettings({ autopilot: e.target.checked }) });
+  const per = el("input", { id: "set-perrun", type: "number", min: "1", max: "6", value: String(S.settings.perRun) });
   box.replaceChildren(
+    el("label", { class: "verify-item", for: "set-autopilot" }, ap, el("span", {}, el("strong", { text: "Autopilot" }), " · works the board every hour: structures new tickets, does the work, asks you questions")),
+    el("div", { class: "field" }, el("label", { for: "set-perrun", text: "Tickets per autopilot run" }), per,
+      el("button", { class: "btn sm", type: "button", style: "align-self:flex-start", disabled: !S.canWrite, onclick: () => saveSettings({ perRun: Math.max(1, Math.min(6, Number(per.value) || 3)) }), text: "Save" })),
     el("div", { class: "field" }, el("span", { class: "label-sm", text: "Where agents run" }),
       whereOpt("browser", "In this tab", "2 at a time, no web access, keep the tab open"),
       whereOpt("cloud", "Claude Code cloud", S.mcp ? "many at once, web access, results arrive as proposals" : "not available in this view")),
@@ -218,6 +223,7 @@ function cardFlags(t) {
   else if (t.output && t.column === "check") f.push(el("span", { class: "flag ok", text: verifyOpen(t) ? `${verifyOpen(t)} to verify` : "Result ready" }));
   const blk = t.column !== "done" ? blockedBy(t) : [];
   if (blk.length) f.push(el("span", { class: "flag err", text: `Blocked by ${blk.map((d) => d.key || d.id).join(", ")}` }));
+  if (questionsOpen(t)) f.push(el("span", { class: "flag err", text: `${questionsOpen(t)} question${questionsOpen(t) === 1 ? "" : "s"} for you` }));
   if (t.pendingProposals) f.push(el("span", { class: "flag run", text: `${t.pendingProposals} proposal${t.pendingProposals === 1 ? "" : "s"}` }));
   return f;
 }
@@ -274,7 +280,7 @@ function wireDrop(column, colId) {
     moveTicket(id, colId, before && before.dataset.id !== id ? before.dataset.id : null);
   });
 }
-function renderAll() { renderDeck(); renderBoard(); if (S.openId && !S.editing) renderDialog(); }
+function renderAll() { renderDeck(); renderAutopilot(); renderBoard(); if (S.openId && !S.editing) renderDialog(); }
 
 /* ---------- dialog ---------- */
 function unsubscribeTicket() { for (const u of S.subs) u(); S.subs = []; S.subFor = null; S.messages = []; S.proposals = []; S.history = []; }
@@ -381,7 +387,8 @@ function briefTab(t) {
         if (await write(t.id, { notes: [...(t.notes || []), { text, at: new Date().toISOString() }] }, "Note added")) noteInput.value = "";
       } })) : null));
   const foot = el("div", { class: "dlg-foot" },
-    S.canWrite && t.column === "review" ? el("button", { class: "btn primary", type: "button", text: "Approve for agent", onclick: () => moveTicket(t.id, "ready", null) }) : null,
+    S.canWrite && t.column === "review" ? el("button", { class: "btn primary", type: "button", text: "Take off hold", onclick: () => moveTicket(t.id, "backlog", null) }) : null,
+    S.canWrite && ["backlog", "ready"].includes(t.column) ? el("button", { class: "btn", type: "button", text: "Put on hold", title: "Autopilot skips tickets on hold", onclick: () => moveTicket(t.id, "review", null) }) : null,
     el("button", { class: "btn", type: "button", text: "Chat about it", onclick: () => { S.tab = "chat"; renderDialog(); } }),
     el("button", { class: "btn", type: "button", text: "Copy brief", onclick: () => copyText(brief(t), "Brief copied") }),
     el("span", { class: "spacer" }),
@@ -483,6 +490,56 @@ function videoForm() {
     } })),
   ];
 }
+function questionsBox(t) {
+  const qs = t.questions || []; if (!qs.length) return null;
+  const open = qs.map((q, i) => ({ q, i })).filter(({ q }) => !q.answer);
+  const inputs = {};
+  return el("div", { class: "proposal" },
+    el("div", { class: "proposal-head" }, el("strong", { text: open.length ? `Autopilot has ${open.length} question${open.length === 1 ? "" : "s"} for you` : "Your answers" }),
+      el("span", { class: "muted", text: open.length ? "Answer, then send it back" : "" })),
+    ...qs.map((q, i) => {
+      if (q.answer) return el("div", { class: "qa" }, el("div", { class: "qa-q", text: q.q }), el("div", { class: "qa-a", text: q.answer }));
+      const a = el("textarea", { id: `q-${i}`, rows: "2", placeholder: "Your answer" }); inputs[i] = a;
+      return el("div", { class: "field" }, el("label", { for: a.id, text: q.q }), a);
+    }),
+    open.length && S.canWrite ? el("div", { class: "actions" }, el("button", { class: "btn primary sm", type: "button", text: "Send answers to autopilot", onclick: async (e) => {
+      const answers = qs.map((q, i) => (inputs[i] ? inputs[i].value.trim() : ""));
+      if (!answers.some(Boolean)) { toast("Answer at least one question."); return; }
+      e.currentTarget.disabled = true;
+      if (!(await sendBack(t, { answers }))) e.currentTarget.disabled = false;
+    } })) : null);
+}
+function changesBox(t) {
+  if (!S.canWrite || t.column !== "check") return null;
+  const box = el("textarea", { id: "changes-input", rows: "2", placeholder: "What should change? For example: shorter hooks, add 2 more examples, cite official sources" });
+  return el("details", { class: "scorecard" }, el("summary", {}, el("strong", { text: "Send back with changes" }), el("span", { class: "muted", text: " · autopilot revises it on the next run" })),
+    el("div", { class: "field", style: "margin-top:10px" }, box),
+    el("div", { class: "actions", style: "margin-top:8px" }, el("button", { class: "btn sm", type: "button", text: "Send back", onclick: async (e) => {
+      if (!box.value.trim()) { toast("Describe the change first."); return; }
+      e.currentTarget.disabled = true;
+      if (!(await sendBack(t, { changes: box.value.trim() }))) e.currentTarget.disabled = false;
+    } })));
+}
+function renderAutopilot() {
+  const box = $("autopilot-body"); if (!box) return;
+  const on = S.settings.autopilot !== false, a = S.autopilot;
+  $("autopilot-state").textContent = on ? "On" : "Off";
+  $("autopilot-state").className = "pill " + (on ? "on" : "off");
+  const questions = [...S.tickets.values()].filter((t) => questionsOpen(t));
+  const checks = ticketsIn("check");
+  box.replaceChildren(...[
+    el("p", { class: "plan-summary", text: a && a.summary ? a.summary : on ? "Autopilot hasn't run yet. It starts at the next full hour." : "Autopilot is off. Turn it on in Settings to let it work the board every hour." }),
+    el("div", { class: "kpis" },
+      el("div", { class: "kpi" }, el("strong", { text: a && a.lastRunAt ? ago(a.lastRunAt).replace(" ago", "") : "–" }), el("span", { text: a && a.lastRunAt ? "since the last run" : "no runs yet" })),
+      el("div", { class: "kpi" + (questions.length ? " alert" : "") }, el("strong", { text: String(questions.length) }), el("span", { text: "tickets with questions" })),
+      el("div", { class: "kpi" }, el("strong", { text: String(checks.length) }), el("span", { text: "results to check" }))),
+    a && a.actions && a.actions.length ? el("div", { class: "section" }, el("h4", { text: "Last run" }),
+      el("ul", { class: "next-list" }, a.actions.slice(0, 8).map((x) => el("li", {}, keyBtn(x.key), el("span", { text: x.did || "" }))))) : null,
+    questions.length ? el("div", { class: "section" }, el("h4", { text: "Waiting for your answers" }),
+      el("ul", { class: "next-list" }, questions.map((t) => el("li", {}, keyBtn(t.key || t.id), el("span", { text: t.questions.find((q) => !q.answer).q }))))) : null,
+    el("p", { class: "muted small", style: "margin:0", text: `Runs every hour from 8:00 to 23:00 Madrid time, up to ${S.settings.perRun} tickets per run. It never approves, deletes or posts anything.` }),
+  ].filter(Boolean));
+}
 function scorecard(t) {
   const r = t.review; if (!r || !r.criteria) return null;
   const met = r.criteria.filter((c) => c.met).length;
@@ -500,7 +557,7 @@ function resultTab(t) {
       el("div", { class: "live", id: "live-output", text: run.text || "Thinking. The first words can take up to a minute." }));
   } else if (t.output) {
     body.append(el("div", { class: "result-meta" }, el("span", { text: `Saved ${ago(t.outputAt)}` }), t.run && t.run.via === "chat" ? el("span", { text: "from the chat" }) : null),
-      scorecard(t), verifyList(t), bufferBox(t), mdNode(t.output));
+      questionsBox(t), scorecard(t), verifyList(t), bufferBox(t), changesBox(t), mdNode(t.output));
   } else {
     body.append(el("div", { class: "chat-empty" },
       el("p", { style: "margin:0", text: "No result yet. Run the agent to have Claude do this ticket, using the brief and everything you've said in the chat." }),
@@ -651,9 +708,10 @@ async function boot() {
     if (S.openId && !S.editing && !(S.tab === "chat" && S.chatBusy)) renderDialog();
   }, (e) => { S.loaded = true; notice(e && e.code === "revoked" ? "Access to this board changed. Reload to continue." : "Live updates stopped. Reload the page to reconnect."); renderAll(); });
   db.doc("meta/plan").onSnapshot((snap) => { S.plan = snap.exists ? snap.data() : null; renderDeck(); }, () => {});
+  db.doc("meta/autopilot").onSnapshot((snap) => { S.autopilot = snap.exists ? snap.data() : null; renderAutopilot(); }, () => {});
   db.doc("meta/memory").onSnapshot((snap) => { S.memory = snap.exists ? snap.data() : null; if (!S.memoryEditing) renderMemory(); }, () => {});
   db.doc("meta/memoryProposal").onSnapshot((snap) => { S.memoryProposal = snap.exists ? snap.data() : null; if (!S.memoryEditing) renderMemory(); }, () => {});
-  db.doc("meta/settings").onSnapshot((snap) => { S.settings = { ...DEFAULT_SETTINGS, ...(snap.exists ? snap.data() : {}) }; renderDeck(); renderSettings(); }, () => {});
+  db.doc("meta/settings").onSnapshot((snap) => { S.settings = { ...DEFAULT_SETTINGS, ...(snap.exists ? snap.data() : {}) }; renderDeck(); renderSettings(); renderAutopilot(); }, () => {});
   await readUsage(); renderDeck(); renderSettings();
   if (S.mcp && [...S.tickets.values()].some((t) => t.cloud && t.cloud.status === "working")) refreshCloud();
 }

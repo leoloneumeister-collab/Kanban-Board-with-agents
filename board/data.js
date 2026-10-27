@@ -2,12 +2,12 @@
 const LAUNCH = new Date(2026, 10, 19);
 const PROJECT = "Project: a solo creator is making short-form GTA 6 content for TikTok, YouTube Shorts and Instagram Reels. GTA 6 launches on PS5 and Xbox Series X|S on Thursday 19 November 2026; PC comes later.";
 const COLUMNS = [
-  { id: "backlog", name: "Backlog", hint: "Drafted, not reviewed yet", color: "var(--muted)" },
-  { id: "review", name: "Your review", hint: "Read, chat, edit, then approve", color: "var(--production)" },
-  { id: "ready", name: "Ready for agent", hint: "Approved. Run it or wait for Run all", color: "var(--publishing)" },
-  { id: "doing", name: "Agent working", hint: "Claude is writing the result", color: "var(--accent)" },
-  { id: "check", name: "Check result", hint: "Read what the agent made", color: "var(--research)" },
-  { id: "done", name: "Done", hint: "Delivered and checked", color: "var(--ok)" },
+  { id: "backlog", name: "Backlog", hint: "New tickets. Autopilot picks these up", color: "var(--muted)" },
+  { id: "review", name: "On hold", hint: "Parked by you. Autopilot skips these", color: "var(--production)" },
+  { id: "ready", name: "Queued", hint: "Autopilot works these next, top first", color: "var(--publishing)" },
+  { id: "doing", name: "Agent working", hint: "Claude is doing the work", color: "var(--accent)" },
+  { id: "check", name: "Check result", hint: "Results and questions for you", color: "var(--research)" },
+  { id: "done", name: "Done", hint: "Approved by you", color: "var(--ok)" },
 ];
 const AGENTS = {
   research: { name: "Research agent", color: "var(--research)", role: "You are the research agent. You produce clear, decision-ready research notes for a beginner creator. Never invent links, numbers, follower counts or quotes. When a fact can't be confirmed, write it on its own line starting with [verify] and say exactly where to check it." },
@@ -21,7 +21,7 @@ const PRIORITIES = ["P1", "P2", "P3"];
 const PRIO_RANK = { P1: 1, P2: 2, P3: 3 };
 const EDITABLE = ["title", "purpose", "goal", "steps", "context", "deliverable", "acceptance", "outOfScope", "human", "priority", "due", "agent", "phase"];
 const FIELD_NAMES = { title: "Title", purpose: "Why it matters", steps: "Steps", goal: "Goal", context: "Context", deliverable: "Deliverable", acceptance: "Acceptance criteria", outOfScope: "Out of scope", human: "Needs you", priority: "Priority", due: "Due date", agent: "Agent", phase: "Phase", column: "Column", output: "Result", dependsOn: "Depends on" };
-const DEFAULT_SETTINGS = { dailyRunCap: 10, autoReview: true, runWhere: "browser" };
+const DEFAULT_SETTINGS = { dailyRunCap: 10, autoReview: true, runWhere: "browser", autopilot: true, perRun: 3 };
 const ARTIFACT_URL = "https://claude.ai/artifact/PrT4ANqepTNYh5qMtN6WLA";
 const REPO_URL = "https://github.com/leoloneumeister-collab/Kanban-Board-with-agents";
 const CLOUD = "Claude Code Remote";
@@ -43,7 +43,7 @@ const S = {
   messages: [], proposals: [], history: [], subs: [], subFor: null,
   chatCtl: null, chatPending: null, chatBusy: false,
   activeRuns: new Map(), runAllActive: false, stopAll: false, confirmRun: null,
-  mcp: null, cloudStatus: new Map(), selecting: false, selected: new Set(), view: "board", bufferDraft: null,
+  autopilot: null, mcp: null, cloudStatus: new Map(), selecting: false, selected: new Set(), view: "board", bufferDraft: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -221,6 +221,20 @@ function parseStepsText(txt) {
     .map((l) => { const m = l.split(/\s+[—–-]\s+|:\s+/); return { text: m[0], hint: m.slice(1).join(" — ") }; }));
 }
 function stepsToText(list) { return (list || []).map((s) => s.hint ? `${s.text} — ${s.hint}` : s.text).join("\n"); }
+function questionsOpen(t) { return (t.questions || []).filter((q) => !q.answer).length; }
+/* Send a ticket back to autopilot with answers and/or requested changes; it lands at the top of Queued. */
+async function sendBack(t, { answers, changes }) {
+  const now = new Date().toISOString();
+  const questions = (t.questions || []).map((q, i) => (answers && answers[i] ? { ...q, answer: answers[i], answeredAt: now } : q));
+  const parts = [];
+  questions.forEach((q) => { if (q.answer && answers && answers.includes(q.answer)) parts.push(`Q: ${q.q}\nA: ${q.answer}`); });
+  if (changes) parts.push(`Change request: ${changes}`);
+  if (!parts.length) { toast("Write an answer or a change first."); return false; }
+  const top = Math.min(0, ...sortedIn("ready").map((x) => x.order ?? 0)) - 1;
+  const ok = await applyChange(t.id, { questions, notes: [...(t.notes || []), { text: parts.join("\n\n"), at: now }], revision: { text: parts.join("\n\n"), at: now }, column: "ready", order: top }, "Before sending back to autopilot", "Sent back. Autopilot picks it up on its next run.");
+  if (ok) addEvent(t.id, "You sent this back to autopilot with answers or changes.");
+  return ok;
+}
 function verifyOpen(t) { return (t.verify || []).filter((v) => !v.checked).length; }
 
 /* Daily run cap. */

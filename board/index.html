@@ -12,17 +12,21 @@
 <header class="hero gutter">
   <p class="eyebrow">Short-form content plan · TikTok, Shorts, Reels</p>
   <h1><span class="hero-num" id="days">--</span> <span id="days-label">days until GTA 6.</span></h1>
-  <p class="hero-sub">Plan every video, review each step, and let Claude agents do the work. Launch is Thursday 19 November 2026 on PS5 and Xbox Series X|S.</p>
+  <p class="hero-sub">You create tickets and make the calls. Claude agents run the board every hour and do the work. Launch is Thursday 19 November 2026 on PS5 and Xbox Series X|S.</p>
   <ol class="how">
-    <li><strong>Review</strong><span>Read a ticket and its steps. Chat with Claude to sharpen it.</span></li>
-    <li><strong>Approve</strong><span>Move it to Ready for agent when the brief is right.</span></li>
-    <li><strong>Run</strong><span>An agent works through the steps, in this tab or in the cloud.</span></li>
-    <li><strong>Check</strong><span>Read the result, tick what to verify, then approve.</span></li>
+    <li><strong>Create</strong><span>Add a ticket in plain words. That's all it needs.</span></li>
+    <li><strong>Autopilot</strong><span>Every hour it structures new tickets and does the work.</span></li>
+    <li><strong>Answer</strong><span>When it's unsure, it asks. Reply in the ticket.</span></li>
+    <li><strong>Approve</strong><span>Check results and approve. Only you can mark Done.</span></li>
   </ol>
 </header>
 
 <main>
   <section class="deck gutter" aria-label="Dashboard">
+    <div class="panel span-2">
+      <div class="panel-head"><h2>Autopilot</h2><span class="pill" id="autopilot-state">On</span></div>
+      <div id="autopilot-body" class="memory-body"></div>
+    </div>
     <div class="panel">
       <div class="panel-head"><h2>Pipeline</h2><span class="label-sm" id="total">0 tickets</span></div>
       <div class="pipeline" id="pipeline" role="img" aria-label="Tickets per column"></div>

@@ -293,3 +293,10 @@ dialog::backdrop { background: rgb(0 0 0 / .35); -webkit-backdrop-filter: blur(6
 #plan-body { display: flex; flex-direction: column; gap: 14px; }
 .section .next-list, .section .sugg-list { padding-left: 0; }
 .section .next-list li, .section .sugg-list li { align-items: center; }
+
+/* Autopilot */
+.pill { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 980px; background: var(--fill); color: var(--muted); }
+.pill.on { background: color-mix(in srgb, var(--ok) 16%, var(--surface)); color: var(--ok); }
+.qa { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.qa-q { font-weight: 600; }
+.qa-a { background: var(--fill); border-radius: 10px; padding: 8px 12px; white-space: pre-wrap; }
