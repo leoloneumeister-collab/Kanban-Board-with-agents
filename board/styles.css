@@ -203,3 +203,23 @@ dialog::backdrop { background: rgb(10 6 16 / .55); }
 .settings summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .settings-body { display: flex; flex-direction: column; gap: 10px; padding-top: 10px; max-width: 360px; }
 .settings-body input[type="number"] { width: 120px; }
+
+/* Memory, dependencies, scorecard, sub-tickets */
+.span-2 { grid-column: 1 / -1; }
+.memory-body { display: flex; flex-direction: column; gap: 10px; }
+.memory-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 13px; }
+.memory-list dt { font-family: var(--mono); font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); padding-top: 2px; }
+.memory-list dd { margin: 0; max-width: 70ch; }
+@media (max-width: 560px) { .memory-list { grid-template-columns: minmax(0, 1fr); } }
+.memory-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.dep-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 12px; max-height: 180px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.dep-item { display: flex; gap: 6px; align-items: flex-start; font-size: 13px; cursor: pointer; min-width: 0; }
+.dep-item input { width: auto; margin-top: 3px; accent-color: var(--accent); }
+.dep-item span { overflow-wrap: anywhere; }
+.scorecard { background: var(--col); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+.scorecard summary { cursor: pointer; }
+.scorecard .ok { color: var(--ok); } .scorecard .err { color: var(--warn); }
+.crit-list { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.crit-list .mark { font-family: var(--mono); font-size: 11px; margin-right: 8px; }
+.crit-list .met .mark { color: var(--ok); } .crit-list .unmet .mark { color: var(--warn); }
+.sub-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }

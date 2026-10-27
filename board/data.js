@@ -22,12 +22,19 @@ const PRIO_RANK = { P1: 1, P2: 2, P3: 3 };
 const EDITABLE = ["title", "goal", "context", "deliverable", "acceptance", "outOfScope", "human", "priority", "due", "agent", "phase"];
 const FIELD_NAMES = { title: "Title", goal: "Goal", context: "Context", deliverable: "Deliverable", acceptance: "Acceptance criteria", outOfScope: "Out of scope", human: "Needs you", priority: "Priority", due: "Due date", agent: "Agent", phase: "Phase", column: "Column", output: "Result", dependsOn: "Depends on" };
 const DEFAULT_SETTINGS = { dailyRunCap: 10, autoReview: true };
+const MEMORY_FIELDS = [
+  ["angle", "Channel angle", "The one angle every video serves, for example beginner guides for returning players"],
+  ["audience", "Audience", "Who watches and what they want"],
+  ["tone", "Tone and style", "How videos sound and look"],
+  ["handles", "Handles and platforms", "Account names and where you post"],
+  ["rules", "Content rules", "What you never do: leaks, licensed music, clickbait"],
+];
 const TAB_ID = "tab-" + Math.random().toString(36).slice(2, 10);
 const FATAL = new Set(["not_granted", "rate_limited", "sampling_disabled", "session_expired"]);
 
 const S = {
   db: null, sample: null, downloads: null, toolsOk: false, canWrite: true, loaded: false,
-  tickets: new Map(), plan: null, settings: { ...DEFAULT_SETTINGS }, usage: { runs: 0 },
+  tickets: new Map(), plan: null, settings: { ...DEFAULT_SETTINGS }, usage: { runs: 0 }, memory: null, memoryProposal: null, memoryEditing: false,
   filter: "all", sortMode: "manual",
   openId: null, tab: "brief", editing: false,
   messages: [], proposals: [], history: [], subs: [], subFor: null,
@@ -98,6 +105,14 @@ function orderFor(colId, movingId, beforeId) {
   return list.length ? (list[list.length - 1].order ?? 0) + 1 : 1;
 }
 function ticketData(t) { const { id, ...rest } = t; return rest; }
+function byKey(key) { return [...S.tickets.values()].find((t) => (t.key || t.id) === key) || S.tickets.get(key) || null; }
+function deps(t) { return (t.dependsOn || []).map((k) => byKey(k)).filter(Boolean); }
+function blockedBy(t) { return deps(t).filter((d) => d.column !== "done"); }
+function memoryText() {
+  const m = S.memory || {};
+  const lines = MEMORY_FIELDS.filter(([k]) => m[k]).map(([k, label]) => `${label}: ${m[k]}`);
+  return lines.length ? lines.join("\n") : "Not set yet. Don't assume an angle or audience the creator hasn't chosen.";
+}
 
 /* ---------- writes ---------- */
 const ticketRef = (id) => S.db.collection("tickets").doc(id);

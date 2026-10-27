@@ -84,10 +84,48 @@ function suggestionText(s) {
   const what = s.action === "move" ? `Move to ${colName(s.to)}` : s.action === "priority" ? `Set priority ${s.to}` : s.action === "due" ? `Change due date to ${fmtDate(s.to)}` : "";
   return [what, s.why].filter(Boolean).join(". ");
 }
+function renderMemory() {
+  const box = $("memory-body"); if (!box) return;
+  const m = S.memory || {}, p = S.memoryProposal;
+  $("memory-age").textContent = m.updatedAt ? `Updated ${ago(m.updatedAt)}` : "Not set yet";
+  const parts = [];
+  if (p && p.changes && S.canWrite) {
+    parts.push(el("div", { class: "proposal" },
+      el("div", { class: "proposal-head" }, el("strong", { text: `Claude proposes a memory update from ${p.from}` }), el("span", { class: "muted", text: ago(p.at) })),
+      p.why ? el("p", { class: "muted", style: "margin:0", text: p.why }) : null,
+      ...Object.keys(p.changes).map((k) => el("div", { class: "diff-row" }, el("span", { class: "label-sm", text: (MEMORY_FIELDS.find((f) => f[0] === k) || [k, k])[1] }),
+        el("div", { class: "diff-before", text: m[k] || "(empty)" }), el("div", { class: "diff-after", text: p.changes[k] }))),
+      el("div", { class: "actions" },
+        el("button", { class: "btn sm primary", type: "button", text: "Accept", onclick: acceptMemoryProposal }),
+        el("button", { class: "btn sm", type: "button", text: "Reject", onclick: () => S.db.doc("meta/memoryProposal").delete().catch(handleWriteError) }))));
+  }
+  if (S.memoryEditing) {
+    const inputs = {};
+    parts.push(el("div", { class: "memory-grid" }, MEMORY_FIELDS.map(([k, label, hint]) => {
+      const a = el("textarea", { id: "mem-" + k, rows: "2", placeholder: hint }); a.value = m[k] || ""; inputs[k] = a;
+      return el("div", { class: "field" }, el("label", { for: a.id, text: label }), a);
+    })), el("div", { class: "actions" },
+      el("button", { class: "btn sm primary", type: "button", text: "Save memory", onclick: async () => {
+        const data = { updatedAt: new Date().toISOString() };
+        for (const [k] of MEMORY_FIELDS) data[k] = inputs[k].value.trim().slice(0, 600);
+        try { await S.db.doc("meta/memory").set(data); S.memoryEditing = false; toast("Project memory saved"); renderMemory(); } catch (e) { handleWriteError(e); }
+      } }),
+      el("button", { class: "btn sm", type: "button", text: "Cancel", onclick: () => { S.memoryEditing = false; renderMemory(); } })));
+  } else {
+    const filled = MEMORY_FIELDS.filter(([k]) => m[k]);
+    parts.push(filled.length
+      ? el("dl", { class: "memory-list" }, filled.map(([k, label]) => [el("dt", { text: label }), el("dd", { text: m[k] })]))
+      : el("p", { class: "muted", style: "margin:0", text: "Every agent reads this before it works. Fill it in once you've picked your angle in GTA-01, or approve a research result and let Claude propose it." }),
+      S.canWrite ? el("div", {}, el("button", { class: "btn sm", type: "button", text: filled.length ? "Edit memory" : "Fill in memory", onclick: () => { S.memoryEditing = true; renderMemory(); } })) : null);
+  }
+  box.replaceChildren(...parts);
+}
 function renderSettings() {
   const box = $("settings-body"); if (!box) return;
   const cap = el("input", { id: "set-cap", type: "number", min: "0", max: "200", value: String(S.settings.dailyRunCap) });
+  const rev = el("input", { id: "set-review", type: "checkbox", checked: !!S.settings.autoReview, disabled: !S.canWrite, onchange: (e) => saveSettings({ autoReview: e.target.checked }) });
   box.replaceChildren(
+    el("label", { class: "verify-item", for: "set-review" }, rev, el("span", { text: "Reviewer agent checks every result and asks for one revision if it falls short. A run then uses up to 4 Claude requests instead of 1." })),
     el("div", { class: "field" }, el("label", { for: "set-cap", text: "Agent runs per day" }), cap,
       el("span", { class: "muted", style: "font-size:12px", text: "Stops runs once reached, to protect your Claude usage. Chat isn't counted." })),
     el("div", { class: "actions" },
@@ -126,6 +164,8 @@ function cardFlags(t) {
   else if (t.run && t.run.status === "error") f.push(el("span", { class: "flag err", text: "Agent failed" }));
   else if (t.column === "doing") f.push(el("span", { class: "flag err", text: "Interrupted" }));
   else if (t.output && t.column === "check") f.push(el("span", { class: "flag ok", text: verifyOpen(t) ? `${verifyOpen(t)} to verify` : "Result ready" }));
+  const blk = t.column !== "done" ? blockedBy(t) : [];
+  if (blk.length) f.push(el("span", { class: "flag err", text: `Blocked by ${blk.map((d) => d.key || d.id).join(", ")}` }));
   if (t.pendingProposals) f.push(el("span", { class: "flag run", text: `${t.pendingProposals} proposal${t.pendingProposals === 1 ? "" : "s"}` }));
   return f;
 }
@@ -211,6 +251,7 @@ function section(title, content, cls) {
     Array.isArray(content) ? el("ul", {}, content.map((x) => el("li", { text: x }))) : el("p", { text: content }));
 }
 function valueText(k, v) {
+  if (k === "dependsOn") return v && v.length ? v.join(", ") : "(none)";
   if (Array.isArray(v)) return v.length ? v.map((x) => "• " + x).join("\n") : "(empty)";
   if (k === "column") return colName(v);
   if (k === "agent") return AGENTS[v] ? AGENTS[v].name : v;
@@ -218,8 +259,11 @@ function valueText(k, v) {
   return v === "" || v == null ? "(empty)" : String(v);
 }
 function proposalCard(t, p) {
-  const title = p.kind === "edit" ? "Claude proposes changes" : p.kind === "move" ? "Claude proposes a move" : p.kind === "result" ? "Claude proposes a result" : "Claude proposes";
+  const title = p.kind === "edit" ? "Claude proposes changes" : p.kind === "move" ? "Claude proposes a move" : p.kind === "result" ? "Claude proposes a result" : p.kind === "subtickets" ? `Claude proposes ${(p.data.tickets || []).length} new tickets` : "Claude proposes";
   const rows = p.kind === "result" ? [el("div", { class: "diff-after" }, mdNode(p.data.output))]
+    : p.kind === "subtickets" ? [el("ol", { class: "sub-list" }, (p.data.tickets || []).map((x, i) => el("li", {},
+        el("strong", { text: x.title }), el("span", { class: "muted", text: ` · ${(AGENTS[x.agent] || {}).name || x.agent}${x.due ? " · " + fmtDate(x.due) : ""}${x.after && x.after.length ? " · after " + x.after.map((n) => "#" + (n + 1)).join(", ") : ""}` }),
+        el("div", { class: "small", text: x.goal }))))]
     : Object.keys(p.data || {}).map((k) => el("div", { class: "diff-row" }, el("span", { class: "label-sm", text: FIELD_NAMES[k] || k }),
       el("div", { class: "diff-before", text: valueText(k, p.old ? p.old[k] : "") }), el("div", { class: "diff-after", text: valueText(k, p.data[k]) })));
   return el("div", { class: "proposal" },
@@ -243,6 +287,9 @@ function briefTab(t) {
       el("div", { class: "fact" }, el("span", { text: "Column" }), colSelect),
       el("div", { class: "fact" }, el("span", { text: "Due" }), el("span", { text: fmtDate(t.due) })),
       el("div", { class: "fact" }, el("span", { text: "Priority" }), el("span", { text: t.priority || "-" }))),
+    deps(t).length ? el("div", { class: "section" }, el("h4", { text: "Depends on" }),
+      el("ul", { class: "next-list" }, deps(t).map((d) => el("li", {}, keyBtn(d.key || d.id), el("span", { text: d.title }),
+        el("span", { class: "flag " + (d.column === "done" ? "ok" : "err"), text: d.column === "done" ? "Done, its result is shared with this agent" : colName(d.column) }))))) : null,
     section("Goal", t.goal), section("Context", t.context), section("Deliverable", t.deliverable),
     section("Acceptance criteria", t.acceptance), section("Out of scope", t.outOfScope), section("Needs you", t.human, "human"),
     el("div", { class: "section" }, el("h4", { text: "Review notes" }),
@@ -308,6 +355,15 @@ function verifyList(t) {
         } }), el("span", { text: v.text }));
     }));
 }
+function scorecard(t) {
+  const r = t.review; if (!r || !r.criteria) return null;
+  const met = r.criteria.filter((c) => c.met).length;
+  return el("details", { class: "scorecard", open: r.score < 70 || (r.mustFix && r.mustFix.length) ? true : null },
+    el("summary", {}, el("strong", { class: r.score >= 80 ? "ok" : r.score >= 60 ? "" : "err", text: `Reviewer score ${r.score}/100` }),
+      el("span", { class: "muted", text: ` · ${met} of ${r.criteria.length} criteria met${r.revised ? ` · revised once (first draft ${r.firstScore})` : ""}` })),
+    el("ul", { class: "crit-list" }, r.criteria.map((c) => el("li", { class: c.met ? "met" : "unmet" }, el("span", { class: "mark", text: c.met ? "Met" : "Not met" }), el("span", { text: c.text }), c.note ? el("span", { class: "muted", text: " · " + c.note }) : null))),
+    r.mustFix && r.mustFix.length ? el("div", { class: "small" }, el("strong", { text: "Still to fix: " }), r.mustFix.join("; ")) : null);
+}
 function resultTab(t) {
   const run = S.activeRuns.get(t.id);
   const body = el("div", { class: "dlg-body" }, ...S.proposals.filter((p) => p.kind === "result").map((p) => proposalCard(t, p)));
@@ -316,7 +372,7 @@ function resultTab(t) {
       el("div", { class: "live", id: "live-output", text: run.text || "Thinking. The first words can take up to a minute." }));
   } else if (t.output) {
     body.append(el("div", { class: "result-meta" }, el("span", { text: `Saved ${ago(t.outputAt)}` }), t.run && t.run.via === "chat" ? el("span", { text: "from the chat" }) : null),
-      verifyList(t), mdNode(t.output));
+      scorecard(t), verifyList(t), mdNode(t.output));
   } else {
     body.append(el("div", { class: "chat-empty" },
       el("p", { style: "margin:0", text: "No result yet. Run the agent to have Claude do this ticket, using the brief and everything you've said in the chat." }),
@@ -324,11 +380,16 @@ function resultTab(t) {
   }
   const open = verifyOpen(t);
   const stuck = !run && t.column === "doing";
+  const blk = blockedBy(t);
+  if (!run && blk.length && t.column !== "done") body.prepend(el("p", { class: "notice", style: "margin:0", text: `Waiting on ${blk.map((d) => d.key || d.id).join(", ")}. You can run it now, but the agent won't have their results.` }));
   const foot = el("div", { class: "dlg-foot" },
     run ? el("button", { class: "btn", type: "button", text: "Stop", onclick: () => run.ctl.abort() })
       : el("button", { class: "btn primary", type: "button", text: t.output ? "Run again" : "Run agent", disabled: !S.sample || !S.canWrite || stuck, onclick: () => runAgent(t.id) }),
     stuck && S.canWrite ? el("button", { class: "btn", type: "button", text: "Reset interrupted run", onclick: () => write(t.id, { column: "ready", order: orderFor("ready", t.id, null), run: { status: "stopped", at: new Date().toISOString() } }, "Moved back to Ready for agent") }) : null,
-    !run && t.output && S.canWrite && t.column !== "done" ? el("button", { class: "btn", type: "button", text: open ? `Approve (${open} to verify)` : "Approve result", disabled: open > 0, title: open ? "Tick every [verify] item first" : "", onclick: () => moveTicket(t.id, "done", null) }) : null,
+    !run && t.output && S.canWrite && t.column !== "done" ? el("button", { class: "btn", type: "button", text: open ? `Approve (${open} to verify)` : "Approve result", disabled: open > 0, title: open ? "Tick every [verify] item first" : "", onclick: async () => {
+      if (await moveTicket(t.id, "done", null) && t.agent === "research" && S.sample) suggestMemory(S.tickets.get(t.id) || t);
+    } }) : null,
+    !run && t.output && S.canWrite && t.column === "done" && S.sample ? el("button", { class: "btn", type: "button", text: "Update project memory from this", onclick: () => suggestMemory(t) }) : null,
     !run && t.output && S.canWrite ? el("button", { class: "btn", type: "button", text: "Ask for changes", onclick: () => { S.tab = "chat"; renderDialog(); setTimeout(() => { const i = $("chat-input"); if (i) { i.value = "Change the result: "; i.focus(); } }, 0); } }) : null,
     el("span", { class: "spacer" }),
     !run && t.output ? el("button", { class: "btn", type: "button", text: "Copy result", onclick: () => copyText(t.output, "Result copied") }) : null);
@@ -362,13 +423,16 @@ function editForm(t) {
     deliverable: area("f-deliverable", v.deliverable, 3), acceptance: area("f-acceptance", (v.acceptance || []).join("\n"), 4),
     outOfScope: area("f-oos", v.outOfScope, 2), human: area("f-human", v.human, 2),
   };
+  const depBoxes = [...S.tickets.values()].filter((x) => !t || x.id !== t.id).sort((a, b) => (a.key || a.id).localeCompare(b.key || b.id))
+    .map((x) => { const key = x.key || x.id; return el("label", { class: "dep-item", for: "dep-" + key }, el("input", { type: "checkbox", id: "dep-" + key, value: key, checked: (v.dependsOn || []).includes(key) }), el("span", { text: `${key} ${x.title}` })); });
   const err = el("p", { class: "notice", hidden: true });
   const save = async () => {
     const title = f.title.value.trim();
     if (!title) { err.textContent = "Give the ticket a title before saving."; err.hidden = false; f.title.focus(); return; }
     const data = { title, agent: f.agent.value, priority: f.priority.value, phase: f.phase.value, due: f.due.value,
       goal: f.goal.value.trim(), context: f.context.value.trim(), deliverable: f.deliverable.value.trim(),
-      acceptance: f.acceptance.value.split("\n").map((s) => s.trim()).filter(Boolean), outOfScope: f.outOfScope.value.trim(), human: f.human.value.trim() };
+      acceptance: f.acceptance.value.split("\n").map((s) => s.trim()).filter(Boolean), outOfScope: f.outOfScope.value.trim(), human: f.human.value.trim(),
+      dependsOn: depBoxes.map((l) => l.querySelector("input")).filter((i) => i.checked).map((i) => i.value) };
     try {
       if (t) { if (await applyChange(t.id, data, "Before your edit", "Ticket saved")) { S.editing = false; renderDialog(); } }
       else {
@@ -390,7 +454,8 @@ function editForm(t) {
     el("div", { class: "grid-2" }, field("Agent", f.agent), field("Priority", f.priority), field("Phase", f.phase), field("Due", f.due)),
     field("Goal: one sentence on the outcome", f.goal), field("Context: what the agent needs to know", f.context),
     field("Deliverable: what it hands back", f.deliverable), field("Acceptance criteria: one per line", f.acceptance),
-    field("Out of scope", f.outOfScope), field("Needs you: what only you can do", f.human));
+    field("Out of scope", f.outOfScope), field("Needs you: what only you can do", f.human),
+    el("div", { class: "field" }, el("span", { class: "label-sm", text: "Depends on: this agent gets their approved results" }), el("div", { class: "dep-grid" }, depBoxes)));
   const foot = el("div", { class: "dlg-foot" },
     el("button", { class: "btn primary", type: "button", text: t ? "Save changes" : "Add ticket", onclick: save }),
     el("span", { class: "spacer" }),
@@ -418,7 +483,7 @@ $("smart-sort").addEventListener("click", smartSort);
 window.addEventListener("beforeunload", (e) => { if (S.activeRuns.size || S.chatBusy) { e.preventDefault(); e.returnValue = ""; } });
 
 async function boot() {
-  renderCountdown(); renderFilters(); renderAll(); renderSettings();
+  renderCountdown(); renderFilters(); renderAll(); renderSettings(); renderMemory();
   setInterval(renderCountdown, 60000);
   if (!window.claude || typeof window.claude.use !== "function") {
     S.loaded = true; notice("Open this board on claude.ai while signed in to load tickets and use Claude."); renderAll(); return;
@@ -435,6 +500,8 @@ async function boot() {
     if (S.openId && !S.editing && !(S.tab === "chat" && S.chatBusy)) renderDialog();
   }, (e) => { S.loaded = true; notice(e && e.code === "revoked" ? "Access to this board changed. Reload to continue." : "Live updates stopped. Reload the page to reconnect."); renderAll(); });
   db.doc("meta/plan").onSnapshot((snap) => { S.plan = snap.exists ? snap.data() : null; renderDeck(); }, () => {});
+  db.doc("meta/memory").onSnapshot((snap) => { S.memory = snap.exists ? snap.data() : null; if (!S.memoryEditing) renderMemory(); }, () => {});
+  db.doc("meta/memoryProposal").onSnapshot((snap) => { S.memoryProposal = snap.exists ? snap.data() : null; if (!S.memoryEditing) renderMemory(); }, () => {});
   db.doc("meta/settings").onSnapshot((snap) => { S.settings = { ...DEFAULT_SETTINGS, ...(snap.exists ? snap.data() : {}) }; renderDeck(); renderSettings(); }, () => {});
   await readUsage(); renderDeck();
 }

@@ -26,6 +26,7 @@ function chatRules(t) {
   const a = AGENTS[t.agent];
   const toolText = S.toolsOk
     ? "- When the creator gives new information or asks to improve the ticket, call propose_edit with only the fields that change. The creator approves it before anything changes.\n- When the creator asks you to solve, do or draft the ticket, write the complete deliverable and call propose_result with it, then reply with a 3-line summary.\n- Call propose_move only when the creator asks to move the ticket. You can't mark tickets done."
+    + "\n- When the ticket is too big for one agent, call propose_subtickets to split it into 2 to 6 smaller tickets."
     : "- You can't change the ticket here. When a change helps, give the exact new text so the creator can paste it.";
   return [
     `You are Claude, working with a creator on one ticket of their Kanban board. ${PROJECT} Today is ${todayISO()}.`,
@@ -35,6 +36,7 @@ function chatRules(t) {
     toolText,
     "- You cannot browse the web. Never invent sources or numbers; put each unverified fact on its own line starting with [verify].",
     GUARD, "",
+    dataBlock("PROJECT MEMORY (decisions the creator has made)", memoryText()), "",
     dataBlock("CURRENT TICKET", brief(t)), "",
     dataBlock("CURRENT RESULT", t.output ? t.output.slice(0, 8000) : "None yet."),
   ].join("\n");
@@ -81,6 +83,32 @@ function chatTools(id) {
         await propose(id, "result", { output: md }, String(input.why || ""));
         addEvent(id, "Claude proposed a result. Review it on the Result tab.");
         return "Proposal filed. The creator will review it.";
+      },
+    },
+    {
+      name: "propose_subtickets",
+      description: "Propose splitting this ticket into 2 to 6 smaller tickets. Each needs title, agent, goal, deliverable and acceptance. after lists the 0-based indexes of earlier new tickets it depends on. Nothing is created until the creator accepts.",
+      inputSchema: { type: "object", properties: {
+        why: str,
+        tickets: { type: "array", minItems: 2, maxItems: 6, items: { type: "object", properties: {
+          title: str, agent: { type: "string", enum: Object.keys(AGENTS) }, goal: str, deliverable: str, context: str,
+          acceptance: { type: "array", items: str }, due: { type: "string", description: "YYYY-MM-DD" }, human: str,
+          after: { type: "array", items: { type: "integer" } } }, required: ["title", "agent", "goal", "deliverable", "acceptance"] } } },
+        required: ["tickets"] },
+      async execute(input) {
+        const list = Array.isArray(input.tickets) ? input.tickets.slice(0, 6) : [];
+        if (list.length < 2) throw new Error("Give at least 2 tickets");
+        const clean = list.map((x, i) => ({
+          title: String(x.title || "").trim().slice(0, 140), agent: AGENTS[x.agent] ? x.agent : "research",
+          goal: String(x.goal || "").trim(), deliverable: String(x.deliverable || "").trim(), context: String(x.context || "").trim(),
+          acceptance: (Array.isArray(x.acceptance) ? x.acceptance : []).map(String).map((a) => a.trim()).filter(Boolean),
+          due: /^\d{4}-\d{2}-\d{2}$/.test(String(x.due || "")) ? String(x.due) : "", human: String(x.human || "").trim(),
+          after: (Array.isArray(x.after) ? x.after : []).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < i),
+        }));
+        if (clean.some((x) => !x.title)) throw new Error("Every ticket needs a title");
+        await propose(id, "subtickets", { tickets: clean }, String(input.why || ""));
+        addEvent(id, `Claude proposed splitting this into ${clean.length} tickets. Review them on the Brief tab.`);
+        return "Proposal filed.";
       },
     },
     {
@@ -138,20 +166,42 @@ async function sendChat(id, preset) {
 }
 
 /* ---------- agent runs ---------- */
+function depOutputs(t) {
+  return deps(t).filter((d) => d.column === "done" && d.output)
+    .map((d) => dataBlock(`APPROVED RESULT OF ${d.key || d.id} (${d.title}) — this ticket depends on it`, d.output.slice(0, 4000))).join("\n\n");
+}
 function agentPrompt(t, chatList) {
   const a = AGENTS[t.agent];
   const chat = chatDigest(chatList || []);
+  const depText = depOutputs(t);
   return [
     a ? a.role : "You are a helpful agent.",
     PROJECT, `Today is ${todayISO()}.`,
     "Write for a beginner creator: plain language, short sentences, no filler. Follow the acceptance criteria exactly.",
     "You cannot browse the web. Never invent links, statistics or quotes. Put each fact that needs checking on its own line starting with [verify] and say where to check it.",
     GUARD, "",
+    dataBlock("PROJECT MEMORY (decisions the creator has made; follow them)", memoryText()), "",
     dataBlock("TICKET", brief(t)),
+    depText ? "\n" + depText : "",
     chat ? "\n" + dataBlock("CONVERSATION WITH THE CREATOR ABOUT THIS TICKET", chat) : "",
     t.output ? "\n" + dataBlock("EARLIER RESULT (improve on it)", t.output.slice(0, 6000)) : "",
     "", "Now write the complete deliverable in Markdown. Start with a one-line summary. End with an \"Acceptance check\" section marking each criterion met or not met.",
   ].join("\n");
+}
+async function reviewResult(t, out, signal) {
+  const prompt = [
+    "You are a strict reviewer checking an agent's deliverable against its ticket. Be honest; a weak result helps nobody.",
+    GUARD,
+    dataBlock("PROJECT MEMORY", memoryText()),
+    dataBlock("TICKET", brief(t)),
+    dataBlock("DELIVERABLE", out.slice(0, 20000)),
+    "Score each acceptance criterion. mustFix lists concrete problems that would make the creator reject this (missing criteria, invented facts presented as certain, wrong format). Leave mustFix empty if it's good enough to approve.",
+    'Reply with only JSON: {"score": 0-100, "criteria": [{"text": "criterion", "met": true, "note": "short"}], "mustFix": ["short instruction"]}',
+  ].join("\n");
+  const r = await S.sample.json(prompt, { cache: false, signal, modelTier: "default" });
+  const criteria = (Array.isArray(r && r.criteria) ? r.criteria : []).slice(0, 20).map((c) => ({ text: String(c.text || ""), met: !!c.met, note: String(c.note || "") }));
+  const mustFix = (Array.isArray(r && r.mustFix) ? r.mustFix : []).slice(0, 8).map(String).filter(Boolean);
+  return { score: Math.max(0, Math.min(100, Number(r && r.score) || 0)), criteria, mustFix, at: new Date().toISOString() };
 }
 async function runAgent(id) {
   const t = S.tickets.get(id);
@@ -170,10 +220,27 @@ async function runAgent(id) {
   try {
     let chatList = S.subFor === id ? S.messages : [];
     if (S.subFor !== id) { try { chatList = (await S.db.collection(`tickets/${id}/messages`).orderBy("at").limit(300).get()).docs.map((d) => d.data()); } catch {} }
-    const res = await S.sample(agentPrompt(S.tickets.get(id) || t, chatList), { cache: false, signal: ctl.signal, onText: ({ text }) => { run.text = text; live(); } });
-    const out = res.text + (res.truncated ? "\n\n_(The agent hit its length limit here. Ask for the rest in the chat.)_" : "");
+    const cur = S.tickets.get(id) || t;
+    const res = await S.sample(agentPrompt(cur, chatList), { cache: false, signal: ctl.signal, onText: ({ text }) => { run.text = text; live(); } });
+    let out = res.text + (res.truncated ? "\n\n_(The agent hit its length limit here. Ask for the rest in the chat.)_" : "");
+    let review = null;
+    if (S.settings.autoReview) {
+      run.text = out + "\n\n— Reviewer is checking this against the acceptance criteria…"; live();
+      try {
+        review = await reviewResult(cur, out, ctl.signal);
+        if (review.mustFix.length) {
+          run.text = "Reviewer asked for fixes:\n- " + review.mustFix.join("\n- ") + "\n\nRevising…"; live();
+          const fix = await S.sample(agentPrompt(cur, chatList) + "\n\n" + dataBlock("YOUR FIRST DRAFT", out.slice(0, 12000)) +
+            "\n\nA reviewer found these problems. Rewrite the complete deliverable and fix every one:\n- " + review.mustFix.join("\n- "),
+            { cache: false, signal: ctl.signal, onText: ({ text }) => { run.text = text; live(); } });
+          out = fix.text + (fix.truncated ? "\n\n_(Cut short at the length limit.)_" : "");
+          const second = await reviewResult(cur, out, ctl.signal);
+          review = { ...second, revised: true, firstScore: review.score };
+        }
+      } catch (e) { if (e && e.code === "cancelled") throw e; review = review || null; }
+    }
     if ((S.tickets.get(id) || t).output) await snapshot(id, "Before a new agent result");
-    await write(id, { output: out, outputAt: new Date().toISOString(), verify: parseVerify(out), review: null, run: { status: "done", at: new Date().toISOString() }, column: "check", order: orderFor("check", id, null) });
+    await write(id, { output: out, outputAt: new Date().toISOString(), verify: parseVerify(out), review, run: { status: "done", at: new Date().toISOString() }, column: "check", order: orderFor("check", id, null) });
     addEvent(id, "Agent run finished. See the Result tab.");
   } catch (e) {
     const cancelled = e && e.code === "cancelled";
@@ -222,13 +289,14 @@ async function smartSort() {
   const btn = $("smart-sort"); btn.disabled = true; $("sort-status").textContent = "Claude is reading the board…";
   const rows = [...S.tickets.values()].sort((a, b) => (a.key || a.id).localeCompare(b.key || b.id)).map((t) => ({
     key: t.key || t.id, title: t.title, column: t.column, agent: t.agent, priority: t.priority, phase: t.phase, due: t.due,
-    needsCreator: !!t.human, hasResult: !!t.output, context: (t.context || "").slice(0, 220),
+    needsCreator: !!t.human, hasResult: !!t.output, context: (t.context || "").slice(0, 220), dependsOn: t.dependsOn || [],
   }));
   const prompt = [
     `You are planning a solo creator's Kanban board. ${PROJECT} Today is ${todayISO()}.`,
     "Columns in flow order: backlog, review (creator reviews), ready (approved for an agent), doing, check (creator checks result), done.",
-    "Tasks: 1) Order the tickets inside each column so the most urgent and most blocking work is first. Consider due dates, priority, dependencies mentioned in context (\"Depends on GTA-01\") and the launch date. 2) Pick up to 3 tickets the creator should act on next. 3) Suggest at most 5 changes: moving a ticket (action \"move\", to = column id), changing priority (action \"priority\", to = P1|P2|P3) or due date (action \"due\", to = YYYY-MM-DD). Only suggest changes with a clear reason. Never suggest moving to done or doing.",
+    "Tasks: 1) Order the tickets inside each column so the most urgent and most blocking work is first. Consider due dates, priority, dependencies mentioned in context (\"Depends on GTA-01\") and the launch date. 2) Pick up to 3 tickets the creator should act on next. 3) Suggest at most 6 changes: moving a ticket (action \"move\", to = column id), changing priority (action \"priority\", to = P1|P2|P3), due date (action \"due\", to = YYYY-MM-DD) or dependencies (action \"depends\", to = comma-separated keys it must wait for, based on its context and current dependsOn). Only suggest changes with a clear reason. Never suggest moving to done or doing.",
     GUARD,
+    dataBlock("PROJECT MEMORY", memoryText()),
     "Reply with only JSON in this shape:",
     '{"summary":"2-3 plain sentences on where the plan stands and the biggest risk","order":{"backlog":["GTA-05"],"review":[],"ready":[],"doing":[],"check":[],"done":[]},"next":[{"key":"GTA-01","why":"short reason"}],"suggestions":[{"key":"GTA-09","action":"priority","to":"P2","why":"short reason"}]}',
     "Every ticket key must appear exactly once in order, in its current column.",
@@ -245,7 +313,7 @@ async function smartSort() {
     }
     const changed = COLUMNS.some((c) => order[c.id].join() !== sortedIn(c.id).map((t) => t.key || t.id).join());
     const clean = (arr, n) => (Array.isArray(arr) ? arr : []).slice(0, n).filter((x) => x && typeof x === "object").map((x) => ({ key: String(x.key || ""), why: String(x.why || ""), action: x.action ? String(x.action) : null, to: x.to != null ? String(x.to) : null }));
-    const suggestions = clean(res.suggestions, 5).filter((s) => ["move", "priority", "due"].includes(s.action) && s.to && S.tickets.has(s.key) && s.to !== "done" && s.to !== "doing").map((s, i) => ({ ...s, id: "s" + i }));
+    const suggestions = clean(res.suggestions, 6).filter((s) => ["move", "priority", "due", "depends"].includes(s.action) && s.to && byKey(s.key) && s.to !== "done" && s.to !== "doing").map((s, i) => ({ ...s, id: "s" + i }));
     await S.db.doc("meta/plan").set({ summary: String(res.summary || ""), next: clean(res.next, 3), suggestions, order: changed ? order : null, orderApplied: false, at: new Date().toISOString() });
     $("sort-status").textContent = changed ? "Claude proposes a new order. Review it below." : "The current order already looks right.";
   } catch (e) {
@@ -272,10 +340,67 @@ async function markSuggestion(s, field) {
   try { await S.db.doc("meta/plan").update({ suggestions }); } catch (e) { handleWriteError(e); }
 }
 async function applySuggestion(s) {
-  const t = S.tickets.get(s.key); if (!t) return;
+  const t = byKey(s.key); if (!t) return;
   let ok = false;
   if (s.action === "move") ok = await moveTicket(t.id, s.to, null);
   else if (s.action === "priority" && PRIORITIES.includes(s.to)) ok = await applyChange(t.id, { priority: s.to }, "Before a Smart sort suggestion", `${s.key} set to ${s.to}`);
   else if (s.action === "due" && /^\d{4}-\d{2}-\d{2}$/.test(s.to)) ok = await applyChange(t.id, { due: s.to }, "Before a Smart sort suggestion", `${s.key} due ${fmtDate(s.to)}`);
+  else if (s.action === "depends") {
+    const keys = s.to.split(",").map((k) => k.trim()).filter((k) => k && k !== s.key && byKey(k));
+    ok = await applyChange(t.id, { dependsOn: [...new Set(keys)] }, "Before a Smart sort suggestion", `${s.key} now depends on ${keys.join(", ") || "nothing"}`);
+  }
   if (ok) markSuggestion(s, "applied");
 }
+
+/* ---------- project memory ---------- */
+async function suggestMemory(t) {
+  if (!S.sample || !t.output) return;
+  toast("Claude is reading the result for decisions to remember…");
+  const prompt = [
+    "You keep the project memory for a solo creator: the decisions every agent must follow.",
+    GUARD,
+    dataBlock("CURRENT MEMORY", JSON.stringify(S.memory || {})),
+    dataBlock(`APPROVED RESULT OF ${t.key || t.id}: ${t.title}`, t.output.slice(0, 12000)),
+    `Fields: ${MEMORY_FIELDS.map(([k, label]) => `${k} (${label})`).join(", ")}.`,
+    "Propose updates only for decisions this result actually settles or recommends. Keep each field under 300 characters. If the result only gives options without a decision, say so in why and propose nothing.",
+    'Reply with only JSON: {"changes": {"angle": "..."}, "why": "one sentence"}',
+  ].join("\n");
+  try {
+    const r = await S.sample.json(prompt, { cache: false });
+    const changes = {};
+    for (const [k] of MEMORY_FIELDS) if (r && r.changes && typeof r.changes[k] === "string" && r.changes[k].trim() && r.changes[k].trim() !== (S.memory || {})[k]) changes[k] = r.changes[k].trim().slice(0, 400);
+    if (!Object.keys(changes).length) { toast(String((r && r.why) || "Nothing in this result to add to the project memory.")); return; }
+    await S.db.doc("meta/memoryProposal").set({ changes, why: String((r && r.why) || ""), from: t.key || t.id, at: new Date().toISOString() });
+    toast("Memory update proposed. Review it in Project memory.");
+  } catch (e) { toast(sampleError(e)); }
+}
+async function acceptMemoryProposal() {
+  const p = S.memoryProposal; if (!p) return;
+  try {
+    await S.db.doc("meta/memory").set({ ...(S.memory || {}), ...p.changes, updatedAt: new Date().toISOString() });
+    await S.db.doc("meta/memoryProposal").delete();
+    toast("Project memory updated");
+  } catch (e) { handleWriteError(e); }
+}
+
+/* Proposal kinds beyond edit, move and result. */
+window.acceptExtraProposal = async function (id, p) {
+  if (p.kind !== "subtickets") return false;
+  const parent = S.tickets.get(id); if (!parent) return false;
+  const made = [];
+  let n = Number((nextKey().match(/\d+/) || ["0"])[0]);
+  for (const x of p.data.tickets || []) {
+    const key = "GTA-" + String(n++).padStart(2, "0");
+    const dependsOn = [...(parent.dependsOn || []), ...(x.after || []).map((i) => made[i]).filter(Boolean)];
+    try {
+      await S.db.collection("tickets").doc(key).set({
+        key, title: x.title, agent: x.agent, goal: x.goal, deliverable: x.deliverable, context: [x.context, `Split from ${parent.key || parent.id}: ${parent.title}.`].filter(Boolean).join("\n\n"),
+        acceptance: x.acceptance, due: x.due || parent.due || "", human: x.human || "", outOfScope: "", priority: parent.priority || "P2", phase: parent.phase || "Pre-launch",
+        dependsOn, column: "backlog", order: orderFor("backlog", key, null) + made.length, notes: [], parent: parent.key || parent.id,
+      });
+      made.push(key);
+    } catch (e) { handleWriteError(e); return false; }
+  }
+  toast(`${made.length} tickets added to Backlog`);
+  return true;
+};
