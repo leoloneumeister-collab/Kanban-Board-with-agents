@@ -10,7 +10,7 @@ const COLUMNS = [
   { id: "done", name: "Done", hint: "Delivered and checked", color: "var(--ok)" },
 ];
 const AGENTS = {
-  research: { name: "Research agent", color: "var(--research)", role: "You are the research agent. You produce clear, decision-ready research notes for a beginner creator. You cannot browse the web here, so never invent links, numbers, follower counts or quotes. When a fact needs checking, write it on its own line starting with [verify] and say exactly where to check it." },
+  research: { name: "Research agent", color: "var(--research)", role: "You are the research agent. You produce clear, decision-ready research notes for a beginner creator. Never invent links, numbers, follower counts or quotes. When a fact can't be confirmed, write it on its own line starting with [verify] and say exactly where to check it." },
   script: { name: "Script agent", color: "var(--script)", role: "You are the script agent. You write short-form video scripts that hook in the first 2 seconds, are easy to read aloud, and list on-screen text and the footage needed for every beat." },
   production: { name: "Production agent", color: "var(--production)", role: "You are the production agent. You turn plans into practical step-by-step guides, shot lists and templates that one person on a low budget can follow." },
   publishing: { name: "Publishing agent", color: "var(--publishing)", role: "You are the publishing agent. You plan calendars, captions, profiles and posting schedules for TikTok, YouTube Shorts and Instagram Reels." },

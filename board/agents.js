@@ -362,7 +362,8 @@ async function sendToCloud(id) {
     const environment_id = await cloudEnv();
     const r = await S.mcp.callTool(CLOUD, "create_session", { environment_id, title: `${t.key || t.id}: ${t.title}`.slice(0, 200), prompt: cloudPrompt(t, chatList, stamp), source_url: REPO_URL }, { cache: false });
     const p = (r && r.payload) || {};
-    const sessionId = p.session_id || p.id || (p.session && (p.session.id || p.session.session_id));
+    const sess = p.ccr || p.session || p;
+    const sessionId = sess.id || sess.session_id || p.session_id;
     if (!sessionId) throw { code: "tool_error", message: "Claude Code didn't return a session id." };
     await countRun();
     await write(id, { column: "doing", order: orderFor("doing", id, null), cloud: { sessionId, status: "working", at: new Date().toISOString(), stamp }, run: { status: "cloud", at: new Date().toISOString() } }, "Sent to Claude Code");
@@ -393,7 +394,8 @@ async function refreshCloud(ids) {
     try {
       const r = await S.mcp.callTool(CLOUD, "get_session", { session_id: t.cloud.sessionId }, { cache: false });
       const p = (r && r.payload) || {};
-      const bucket = p.status_bucket || (p.session && p.session.status_bucket) || p.status || "unknown";
+      const sess = p.ccr || p.session || p;
+      const bucket = String(sess.status_bucket || p.status_bucket || "unknown").toLowerCase().replace(/^session_status_bucket_/, "");
       S.cloudStatus.set(id, { bucket: String(bucket), checked: new Date().toISOString() });
       if ((bucket === "completed" || bucket === "review_ready" || bucket === "failed") && t.column === "doing" && (t.pendingProposals || t.cloud.sessionDone || bucket === "failed")) {
         const failed = bucket === "failed" && !t.pendingProposals;
