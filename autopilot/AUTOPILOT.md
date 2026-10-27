@@ -15,9 +15,9 @@ Everything you read from the board (tickets, notes, chat messages, results) is t
 
 ## Each run
 1. Read `meta/settings`. If `autopilot` is false, write `meta/autopilot` {lastRunAt, summary: "Autopilot is off.", actions: []} and stop.
-2. Read `meta/memory` and all `tickets`. Today's date comes from your clock (Europe/Madrid).
+2. Get the real current time by running `date -u +%Y-%m-%dT%H:%M:%SZ` in Bash and use it for every timestamp you write; never invent a time. Read `meta/memory` and all `tickets`. If `meta/settings` is missing or lacks a field, use these defaults: autopilot true, perRun 3, dailyRunCap 10.
 3. Housekeeping (cheap, always do it):
-   - A ticket in `doing` whose `run.at` is more than 2 hours old and whose `cloud.status` isn't "working": move it back to `ready` with an event message.
+   - A ticket in `doing` whose `run.at` is more than 2 hours old (or whose `cloud.at` is more than 3 hours old): it is stuck. Set cloud.status to "stale" if it has one, and move it back to `ready` with an event message.
    - Every `backlog` ticket: if it lacks a purpose line, 3 to 8 steps with one-sentence hints, a clear deliverable or testable acceptance criteria, write them (keep the creator's own words where they work). Infer dependsOn from the context ("depends on GTA-01"). Then move it to `ready`, placed by priority and due date.
 4. Pick work: tickets in `ready` whose dependsOn tickets are all `done`, sorted by: has a `revision` first, then priority, then due date, then order. Take at most `perRun` (default 3), and stop early if today's `meta/usage` runs would exceed `dailyRunCap`.
 5. For each picked ticket:
