@@ -11,8 +11,9 @@ function viewSorted(col) {
 /* ---------- header and dashboard ---------- */
 function renderCountdown() {
   const n = daysUntil(LAUNCH);
-  $("days").textContent = n > 0 ? n : "0";
-  $("days-label").textContent = n > 1 ? "days to launch" : n === 1 ? "day to launch" : "GTA 6 is out";
+  $("days").textContent = n > 0 ? n : "";
+  $("nav-days").textContent = n > 0 ? n : "0";
+  $("days-label").textContent = n > 1 ? "days until GTA 6." : n === 1 ? "day until GTA 6." : "GTA 6 is out.";
 }
 function renderFilters() {
   const box = $("filters"); box.replaceChildren();
@@ -220,6 +221,22 @@ function cardFlags(t) {
   if (t.pendingProposals) f.push(el("span", { class: "flag run", text: `${t.pendingProposals} proposal${t.pendingProposals === 1 ? "" : "s"}` }));
   return f;
 }
+function stepsBar(t) {
+  const { done, total } = stepsDone(t); if (!total) return null;
+  return el("div", { class: "steps-bar", title: `${done} of ${total} steps done` },
+    el("span", { class: "steps-track" }, el("span", { class: "steps-fill", style: `width:${(done / total) * 100}%` })),
+    el("span", { class: "steps-count", text: `${done}/${total} steps` }));
+}
+function stepsChecklist(t) {
+  const steps = t.steps || []; if (!steps.length) return null;
+  const { done, total } = stepsDone(t);
+  return el("div", { class: "section" }, el("h4", { text: `Steps · ${done} of ${total} done` }),
+    el("ol", { class: "steps-list" }, steps.map((s, i) => el("li", { class: "step" + (s.done ? " done" : "") },
+      el("label", { class: "step-label", for: `step-${i}` },
+        el("input", { type: "checkbox", id: `step-${i}`, checked: s.done, disabled: !S.canWrite, onchange: (e) => write(t.id, { steps: steps.map((x, j) => (j === i ? { ...x, done: e.target.checked } : x)) }) }),
+        el("span", { class: "step-num", text: String(i + 1) }),
+        el("span", { class: "step-body" }, el("span", { class: "step-text", text: s.text }), s.hint ? el("span", { class: "step-hint", text: s.hint }) : null))))));
+}
 function renderCard(t) {
   const a = AGENTS[t.agent]; const due = parseDate(t.due);
   const soon = due && t.column !== "done" && daysUntil(due) <= 2;
@@ -233,6 +250,8 @@ function renderCard(t) {
     } },
     el("div", { class: "card-top" }, el("span", { text: t.key || t.id }), el("span", { class: "prio " + (t.priority || ""), text: t.priority || "P3" })),
     el("div", { class: "card-title", text: t.title || "Untitled ticket" }),
+    t.purpose ? el("div", { class: "card-purpose", text: t.purpose }) : null,
+    stepsBar(t),
     el("div", { class: "card-meta" },
       el("span", { class: "agent", style: `--agent-color:${a ? a.color : "var(--muted)"}`, text: a ? a.name : "No agent" }),
       el("span", { class: "due" + (soon ? " soon" : ""), text: fmtDate(t.due) }),
@@ -311,6 +330,7 @@ function section(title, content, cls) {
 }
 function valueText(k, v) {
   if (k === "dependsOn") return v && v.length ? v.join(", ") : "(none)";
+  if (k === "steps") return v && v.length ? v.map((x, i) => `${i + 1}. ${x.text}${x.hint ? " — " + x.hint : ""}`).join("\n") : "(none)";
   if (Array.isArray(v)) return v.length ? v.map((x) => "• " + x).join("\n") : "(empty)";
   if (k === "column") return colName(v);
   if (k === "agent") return AGENTS[v] ? AGENTS[v].name : v;
@@ -323,7 +343,7 @@ function proposalCard(t, p) {
     : p.kind === "recur" ? [el("div", { class: "diff-after", text: `${p.data.ticket.title}\nDue ${fmtDate(p.data.ticket.due)} · goes straight to Ready for agent` })]
     : p.kind === "subtickets" ? [el("ol", { class: "sub-list" }, (p.data.tickets || []).map((x, i) => el("li", {},
         el("strong", { text: x.title }), el("span", { class: "muted", text: ` · ${(AGENTS[x.agent] || {}).name || x.agent}${x.due ? " · " + fmtDate(x.due) : ""}${x.after && x.after.length ? " · after " + x.after.map((n) => "#" + (n + 1)).join(", ") : ""}` }),
-        el("div", { class: "small", text: x.goal }))))]
+        el("div", { class: "small", text: x.goal }), x.steps && x.steps.length ? el("div", { class: "small muted", text: `${x.steps.length} steps: ${x.steps.map((s) => s.text).join(" · ")}` }) : null)))]
     : Object.keys(p.data || {}).map((k) => el("div", { class: "diff-row" }, el("span", { class: "label-sm", text: FIELD_NAMES[k] || k }),
       el("div", { class: "diff-before", text: valueText(k, p.old ? p.old[k] : "") }), el("div", { class: "diff-after", text: valueText(k, p.data[k]) })));
   return el("div", { class: "proposal" },
@@ -343,6 +363,7 @@ function briefTab(t) {
   const notes = (t.notes || []).map((n) => el("div", { class: "note" }, el("time", { text: fmtTime(n.at) }), n.text));
   const body = el("div", { class: "dlg-body" },
     ...S.proposals.filter((p) => p.kind !== "result").map((p) => proposalCard(t, p)),
+    t.purpose ? el("p", { class: "lead", text: t.purpose }) : null,
     el("div", { class: "facts" },
       el("div", { class: "fact" }, el("span", { text: "Column" }), colSelect),
       el("div", { class: "fact" }, el("span", { text: "Due" }), el("span", { text: fmtDate(t.due) })),
@@ -350,7 +371,7 @@ function briefTab(t) {
     deps(t).length ? el("div", { class: "section" }, el("h4", { text: "Depends on" }),
       el("ul", { class: "next-list" }, deps(t).map((d) => el("li", {}, keyBtn(d.key || d.id), el("span", { text: d.title }),
         el("span", { class: "flag " + (d.column === "done" ? "ok" : "err"), text: d.column === "done" ? "Done, its result is shared with this agent" : colName(d.column) }))))) : null,
-    section("Goal", t.goal), section("Context", t.context), section("Deliverable", t.deliverable),
+    section("Goal", t.goal), stepsChecklist(t), section("Context", t.context), section("Deliverable", t.deliverable),
     section("Acceptance criteria", t.acceptance), section("Out of scope", t.outOfScope), section("Needs you", t.human, "human"),
     el("div", { class: "section" }, el("h4", { text: "Review notes" }),
       notes.length ? el("div", { class: "notes" }, notes) : el("p", { class: "muted", text: "No notes yet." }),
@@ -537,6 +558,7 @@ function editForm(t) {
     title: inp("f-title", v.title), agent: sel("f-agent", Object.entries(AGENTS).map(([k, a]) => [k, a.name]), v.agent),
     priority: sel("f-priority", PRIORITIES.map((p) => [p, p]), v.priority), phase: sel("f-phase", PHASES.map((p) => [p, p]), v.phase),
     due: inp("f-due", v.due, "date"), goal: area("f-goal", v.goal, 2), context: area("f-context", v.context, 4),
+    purpose: inp("f-purpose", v.purpose), steps: area("f-steps", stepsToText(v.steps), 6),
     deliverable: area("f-deliverable", v.deliverable, 3), acceptance: area("f-acceptance", (v.acceptance || []).join("\n"), 4),
     outOfScope: area("f-oos", v.outOfScope, 2), human: area("f-human", v.human, 2),
     recurrence: sel("f-recur", [["", "Doesn't repeat"], ["weekly", "Every week"]], v.recurrence || ""),
@@ -547,7 +569,9 @@ function editForm(t) {
   const save = async () => {
     const title = f.title.value.trim();
     if (!title) { err.textContent = "Give the ticket a title before saving."; err.hidden = false; f.title.focus(); return; }
-    const data = { title, agent: f.agent.value, priority: f.priority.value, phase: f.phase.value, due: f.due.value,
+    const oldSteps = (t && t.steps) || [];
+    const steps = parseStepsText(f.steps.value).map((s) => ({ ...s, done: !!(oldSteps.find((o) => o.text === s.text) || {}).done }));
+    const data = { title, purpose: f.purpose.value.trim(), steps, agent: f.agent.value, priority: f.priority.value, phase: f.phase.value, due: f.due.value,
       goal: f.goal.value.trim(), context: f.context.value.trim(), deliverable: f.deliverable.value.trim(),
       acceptance: f.acceptance.value.split("\n").map((s) => s.trim()).filter(Boolean), outOfScope: f.outOfScope.value.trim(), human: f.human.value.trim(),
       dependsOn: depBoxes.map((l) => l.querySelector("input")).filter((i) => i.checked).map((i) => i.value), recurrence: f.recurrence.value };
@@ -570,7 +594,9 @@ function editForm(t) {
     el("h3", { id: "dlg-title", text: t ? t.title : "Write a ticket an agent can act on" }));
   const body = el("div", { class: "dlg-body" }, err, field("Title", f.title),
     el("div", { class: "grid-2" }, field("Agent", f.agent), field("Priority", f.priority), field("Phase", f.phase), field("Due", f.due), field("Repeats", f.recurrence)),
-    field("Goal: one sentence on the outcome", f.goal), field("Context: what the agent needs to know", f.context),
+    field("Why it matters: one short sentence", f.purpose),
+    field("Goal: one sentence on the outcome", f.goal),
+    field("Steps: one per line, written as Step — short explanation", f.steps), field("Context: what the agent needs to know", f.context),
     field("Deliverable: what it hands back", f.deliverable), field("Acceptance criteria: one per line", f.acceptance),
     field("Out of scope", f.outOfScope), field("Needs you: what only you can do", f.human),
     el("div", { class: "field" }, el("span", { class: "label-sm", text: "Depends on: this agent gets their approved results" }), el("div", { class: "dep-grid" }, depBoxes)));

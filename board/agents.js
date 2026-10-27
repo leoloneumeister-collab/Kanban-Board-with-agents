@@ -7,7 +7,10 @@ function brief(t) {
   const lines = [
     `# ${t.key || t.id}: ${t.title}`,
     `Agent role: ${a ? a.name : "Any"} · Phase: ${t.phase || "-"} · Priority: ${t.priority || "-"} · Due: ${t.due || "-"}`, "",
-    "## Goal", t.goal || "-", "", "## Context", t.context || "-", "", "## Deliverable", t.deliverable || "-", "",
+    "## Why it matters", t.purpose || "-", "",
+    "## Goal", t.goal || "-", "",
+    "## Steps", ...(t.steps && t.steps.length ? t.steps.map((s, i) => `${i + 1}. ${s.text}${s.hint ? ` — ${s.hint}` : ""}${s.done ? " (done)" : ""}`) : ["-"]), "",
+    "## Context", t.context || "-", "", "## Deliverable", t.deliverable || "-", "",
     "## Acceptance criteria", ...(t.acceptance && t.acceptance.length ? t.acceptance.map((x) => `- ${x}`) : ["-"]), "",
     "## Out of scope", t.outOfScope || "-",
   ];
@@ -33,6 +36,7 @@ function chatRules(t) {
     `Your role for this ticket: ${a ? a.role : "a helpful assistant"}`,
     "How to work:",
     "- Reply like a sharp colleague: short, concrete, no filler. Disagree when the plan has a weak spot and say why.",
+    "- Good tickets have a one-line purpose and 3 to 8 small steps, each with a one-sentence explanation. When a ticket is vague, propose that structure.",
     toolText,
     "- You cannot browse the web. Never invent sources or numbers; put each unverified fact on its own line starting with [verify].",
     GUARD, "",
@@ -49,7 +53,8 @@ function chatTools(id) {
       description: "Propose changes to the current ticket's fields. Pass only fields that change, plus why. acceptance is the full new list. Nothing changes until the creator accepts.",
       inputSchema: { type: "object", properties: {
         why: { type: "string", description: "One sentence on why this helps" },
-        title: str, goal: str, context: str, deliverable: str, outOfScope: str, human: { type: "string", description: "What only the creator can do" },
+        title: str, purpose: { type: "string", description: "One short sentence: why this ticket matters" }, goal: str, context: str, deliverable: str, outOfScope: str, human: { type: "string", description: "What only the creator can do" },
+        steps: { type: "array", description: "The full new list of 3 to 8 steps in order", items: { type: "object", properties: { text: { type: "string", description: "Short action, under 10 words" }, hint: { type: "string", description: "One sentence explaining how or why" } }, required: ["text"] } },
         acceptance: { type: "array", items: str }, priority: { type: "string", enum: PRIORITIES }, due: { type: "string", description: "YYYY-MM-DD" },
         agent: { type: "string", enum: Object.keys(AGENTS) }, phase: { type: "string", enum: PHASES } }, required: ["why"] },
       async execute(input) {
@@ -59,13 +64,14 @@ function chatTools(id) {
           if (!(k in input) || input[k] == null) continue;
           let v = input[k];
           if (k === "acceptance") { if (!Array.isArray(v)) throw new Error("acceptance must be a list of strings"); v = v.map(String).map((s) => s.trim()).filter(Boolean); }
+          else if (k === "steps") { v = cleanSteps(v).map((s) => ({ ...s, done: false })); if (!v.length) throw new Error("steps must be a non-empty list"); }
           else v = String(v).trim();
           if (k === "priority" && !PRIORITIES.includes(v)) throw new Error("priority must be P1, P2 or P3");
           if (k === "agent" && !AGENTS[v]) throw new Error("unknown agent");
           if (k === "phase" && !PHASES.includes(v)) throw new Error("unknown phase");
           if (k === "due" && v && !/^\d{4}-\d{2}-\d{2}$/.test(v)) throw new Error("due must be YYYY-MM-DD");
           if (k === "title" && !v) continue;
-          if (JSON.stringify(v) === JSON.stringify(t[k] ?? (k === "acceptance" ? [] : ""))) continue;
+          if (JSON.stringify(v) === JSON.stringify(t[k] ?? (k === "acceptance" || k === "steps" ? [] : ""))) continue;
           data[k] = v;
         }
         if (!Object.keys(data).length) return "Nothing would change, so no proposal was made.";
@@ -92,8 +98,9 @@ function chatTools(id) {
         why: str,
         tickets: { type: "array", minItems: 2, maxItems: 6, items: { type: "object", properties: {
           title: str, agent: { type: "string", enum: Object.keys(AGENTS) }, goal: str, deliverable: str, context: str,
-          acceptance: { type: "array", items: str }, due: { type: "string", description: "YYYY-MM-DD" }, human: str,
-          after: { type: "array", items: { type: "integer" } } }, required: ["title", "agent", "goal", "deliverable", "acceptance"] } } },
+          acceptance: { type: "array", items: str }, due: { type: "string", description: "YYYY-MM-DD" }, human: str, purpose: str,
+          steps: { type: "array", items: { type: "object", properties: { text: str, hint: str }, required: ["text"] } },
+          after: { type: "array", items: { type: "integer" } } }, required: ["title", "agent", "goal", "steps", "deliverable", "acceptance"] } } },
         required: ["tickets"] },
       async execute(input) {
         const list = Array.isArray(input.tickets) ? input.tickets.slice(0, 6) : [];
@@ -103,6 +110,7 @@ function chatTools(id) {
           goal: String(x.goal || "").trim(), deliverable: String(x.deliverable || "").trim(), context: String(x.context || "").trim(),
           acceptance: (Array.isArray(x.acceptance) ? x.acceptance : []).map(String).map((a) => a.trim()).filter(Boolean),
           due: /^\d{4}-\d{2}-\d{2}$/.test(String(x.due || "")) ? String(x.due) : "", human: String(x.human || "").trim(),
+          purpose: String(x.purpose || "").trim(), steps: cleanSteps(x.steps),
           after: (Array.isArray(x.after) ? x.after : []).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < i),
         }));
         if (clean.some((x) => !x.title)) throw new Error("Every ticket needs a title");
@@ -166,6 +174,13 @@ async function sendChat(id, preset) {
 }
 
 /* ---------- agent runs ---------- */
+const STRUCTURE = [
+  "Now write the complete deliverable in Markdown, structured like this:",
+  "1. A one-line summary in bold.",
+  "2. One section per step of the ticket, in order, headed \"## Step N: <step>\". Open each section with one short sentence explaining what this step does and why, then the actual work. Use short sentences, lists and tables; no filler.",
+  "3. A \"## Your next steps\" section: a numbered checklist of 3 to 6 concrete things the creator does next, each with a one-line explanation.",
+  "4. An \"## Acceptance check\" section marking each criterion met or not met.",
+].join("\n");
 function depOutputs(t) {
   return deps(t).filter((d) => d.column === "done" && d.output)
     .map((d) => dataBlock(`APPROVED RESULT OF ${d.key || d.id} (${d.title}) — this ticket depends on it`, d.output.slice(0, 4000))).join("\n\n");
@@ -185,7 +200,7 @@ function agentPrompt(t, chatList) {
     depText ? "\n" + depText : "",
     chat ? "\n" + dataBlock("CONVERSATION WITH THE CREATOR ABOUT THIS TICKET", chat) : "",
     t.output ? "\n" + dataBlock("EARLIER RESULT (improve on it)", t.output.slice(0, 6000)) : "",
-    "", "Now write the complete deliverable in Markdown. Start with a one-line summary. End with an \"Acceptance check\" section marking each criterion met or not met.",
+    "", STRUCTURE,
   ].join("\n");
 }
 async function reviewResult(t, out, signal) {
@@ -195,7 +210,7 @@ async function reviewResult(t, out, signal) {
     dataBlock("PROJECT MEMORY", memoryText()),
     dataBlock("TICKET", brief(t)),
     dataBlock("DELIVERABLE", out.slice(0, 20000)),
-    "Score each acceptance criterion. mustFix lists concrete problems that would make the creator reject this (missing criteria, invented facts presented as certain, wrong format). Leave mustFix empty if it's good enough to approve.",
+    "Score each acceptance criterion. Also check the deliverable covers every ticket step in its own section with a short explanation, and ends with clear next steps for the creator. mustFix lists concrete problems that would make the creator reject this (missing criteria, invented facts presented as certain, wrong format). Leave mustFix empty if it's good enough to approve.",
     'Reply with only JSON: {"score": 0-100, "criteria": [{"text": "criterion", "met": true, "note": "short"}], "mustFix": ["short instruction"]}',
   ].join("\n");
   const r = await S.sample.json(prompt, { cache: false, signal, modelTier: "default" });
@@ -327,6 +342,7 @@ function cloudPrompt(t, chatList, stamp) {
     depText ? "\n" + depText : "",
     chatList && chatList.length ? "\n" + dataBlock("CONVERSATION WITH THE CREATOR", chatDigest(chatList)) : "",
     "",
+    STRUCTURE, "",
     "WHEN THE DELIVERABLE IS READY, hand it back to the board for the creator to approve. Do NOT edit the ticket itself.",
     `1. Use the ArtifactData tool with url ${ARTIFACT_URL}: action "set", collection "tickets/${id}/proposals", doc_id "cloud-${stamp}", data {"kind": "result", "data": {"output": <the full deliverable as Markdown>}, "old": {}, "why": "Written by a Claude Code cloud session with web access", "status": "pending", "at": <current ISO time>}.`,
     `2. Read collection "tickets" doc_id "${id}", then "update" it with data {"pendingProposals": <its current pendingProposals or 0, plus 1>, "cloud": {"sessionDone": true}} pinned with if_version.`,
@@ -504,7 +520,7 @@ window.acceptExtraProposal = async function (id, p) {
     const dependsOn = [...(parent.dependsOn || []), ...(x.after || []).map((i) => made[i]).filter(Boolean)];
     try {
       await S.db.collection("tickets").doc(key).set({
-        key, title: x.title, agent: x.agent, goal: x.goal, deliverable: x.deliverable, context: [x.context, `Split from ${parent.key || parent.id}: ${parent.title}.`].filter(Boolean).join("\n\n"),
+        key, title: x.title, agent: x.agent, goal: x.goal, purpose: x.purpose || "", steps: x.steps || [], deliverable: x.deliverable, context: [x.context, `Split from ${parent.key || parent.id}: ${parent.title}.`].filter(Boolean).join("\n\n"),
         acceptance: x.acceptance, due: x.due || parent.due || "", human: x.human || "", outOfScope: "", priority: parent.priority || "P2", phase: parent.phase || "Pre-launch",
         dependsOn, column: "backlog", order: orderFor("backlog", key, null) + made.length, notes: [], parent: parent.key || parent.id,
       });
@@ -517,10 +533,18 @@ window.acceptExtraProposal = async function (id, p) {
 
 /* ---------- workflows ---------- */
 const PIPELINE = [
-  { step: "Script", agent: "script", days: -3, goal: "Write a 20 to 45 second script for this video.", deliverable: "Hook, beat-by-beat script, on-screen text, and the footage needed for each beat.", acceptance: ["Hook in the first 2 seconds", "Readable aloud in under 45 seconds", "Every beat lists the footage needed", "Follows the project memory's angle and tone"] },
-  { step: "Shot list", agent: "production", days: -2, goal: "Turn the approved script into a shot list you can record in one session.", deliverable: "Numbered shot list with location or mission, camera angle, length and capture settings.", acceptance: ["One shot per script beat", "Grouped so recording happens in one session", "Notes which shots need in-game setup"], human: "Record the shots." },
-  { step: "Caption and hashtags", agent: "publishing", days: -1, goal: "Write the caption, cover text and hashtags for each platform.", deliverable: "Cover text, caption and 3 to 5 hashtags for TikTok, YouTube Shorts and Reels.", acceptance: ["Caption fits each platform's limit", "Cover text under 6 words", "No banned or spammy hashtags"] },
-  { step: "Schedule", agent: "publishing", days: 0, goal: "Pick the posting time and prepare the upload checklist.", deliverable: "Posting time per platform with reasoning and a pre-upload checklist.", acceptance: ["Time per platform", "Checklist covers captions, cover, music check"], human: "Upload and post, or send the caption to Buffer." },
+  { step: "Script", agent: "script", days: -3, purpose: "A tight script is what makes people stop scrolling.", goal: "Write a 20 to 45 second script for this video.", deliverable: "Hook, beat-by-beat script, on-screen text, and the footage needed for each beat.",
+    steps: [["Pick the hook", "Choose the one line that makes people stay past 2 seconds."], ["Outline 3 to 5 beats", "Each beat is one idea the viewer remembers."], ["Write the voiceover", "Short sentences you can read aloud in one breath."], ["Add on-screen text", "Captions for people watching on mute."], ["List the footage", "What to record for each beat, so the shot list is easy."], ["End with a reason to follow", "One line that sets up the next video."]],
+    acceptance: ["Hook in the first 2 seconds", "Readable aloud in under 45 seconds", "Every beat lists the footage needed", "Follows the project memory's angle and tone"] },
+  { step: "Shot list", agent: "production", days: -2, purpose: "A clear shot list turns an hour of recording into 15 minutes.", goal: "Turn the approved script into a shot list you can record in one session.", deliverable: "Numbered shot list with location or mission, camera angle, length and capture settings.",
+    steps: [["Map each beat to a shot", "One shot per beat, so editing is simple."], ["Group shots by location", "Record everything in one place before moving on."], ["Note the in-game setup", "Time of day, weather, outfit or vehicle needed."], ["Set capture settings", "Vertical-friendly framing and the console's capture length."], ["Add a backup shot", "One spare clip in case a shot doesn't work."]],
+    acceptance: ["One shot per script beat", "Grouped so recording happens in one session", "Notes which shots need in-game setup"], human: "Record the shots." },
+  { step: "Caption and hashtags", agent: "publishing", days: -1, purpose: "The caption and cover decide whether people tap at all.", goal: "Write the caption, cover text and hashtags for each platform.", deliverable: "Cover text, caption and 3 to 5 hashtags for TikTok, YouTube Shorts and Reels.",
+    steps: [["Write the cover text", "Under 6 words, readable on a small phone."], ["Write one caption per platform", "Each fits that platform's length and style."], ["Pick 3 to 5 hashtags", "Specific tags beat huge generic ones."], ["Add a question for comments", "Comments push the video to more people."]],
+    acceptance: ["Caption fits each platform's limit", "Cover text under 6 words", "No banned or spammy hashtags"] },
+  { step: "Schedule", agent: "publishing", days: 0, purpose: "Posting at the right time gives the video its best first hour.", goal: "Pick the posting time and prepare the upload checklist.", deliverable: "Posting time per platform with reasoning and a pre-upload checklist.",
+    steps: [["Choose a time per platform", "Based on when your audience is online."], ["Check music and footage rules", "Avoid muted clips and copyright claims."], ["Prepare the upload checklist", "Cover, caption, tags, pinned comment."], ["Save the caption to Buffer", "Use the Buffer button on this ticket's result."]],
+    acceptance: ["Time per platform", "Checklist covers captions, cover, music check"], human: "Upload and post, or send the caption to Buffer." },
 ];
 async function createVideoPipeline({ idea, notes, postDate }) {
   const series = "v-" + Date.now().toString(36);
@@ -529,7 +553,7 @@ async function createVideoPipeline({ idea, notes, postDate }) {
     const key = nextKey(i);
     const data = {
       key, title: `${st.step}: ${idea}`, agent: st.agent, priority: "P2", phase: postDate && postDate >= "2026-11-19" ? (postDate <= "2026-11-26" ? "Launch week" : "Post-launch") : "Pre-launch",
-      due: postDate ? addDays(postDate, st.days) : "", goal: st.goal, deliverable: st.deliverable, acceptance: st.acceptance,
+      due: postDate ? addDays(postDate, st.days) : "", goal: st.goal, purpose: st.purpose, steps: st.steps.map(([text, hint]) => ({ text, hint, done: false })), deliverable: st.deliverable, acceptance: st.acceptance,
       context: [`Video idea: ${idea}`, notes, postDate ? `Planned post date: ${postDate}.` : ""].filter(Boolean).join("\n\n"),
       outOfScope: "", human: st.human || "", dependsOn: made.slice(-1), series, column: "review", order: orderFor("review", key, null) + i, notes: [],
     };

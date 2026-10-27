@@ -19,8 +19,8 @@ const AGENTS = {
 const PHASES = ["Setup", "Pre-launch", "Launch week", "Post-launch"];
 const PRIORITIES = ["P1", "P2", "P3"];
 const PRIO_RANK = { P1: 1, P2: 2, P3: 3 };
-const EDITABLE = ["title", "goal", "context", "deliverable", "acceptance", "outOfScope", "human", "priority", "due", "agent", "phase"];
-const FIELD_NAMES = { title: "Title", goal: "Goal", context: "Context", deliverable: "Deliverable", acceptance: "Acceptance criteria", outOfScope: "Out of scope", human: "Needs you", priority: "Priority", due: "Due date", agent: "Agent", phase: "Phase", column: "Column", output: "Result", dependsOn: "Depends on" };
+const EDITABLE = ["title", "purpose", "goal", "steps", "context", "deliverable", "acceptance", "outOfScope", "human", "priority", "due", "agent", "phase"];
+const FIELD_NAMES = { title: "Title", purpose: "Why it matters", steps: "Steps", goal: "Goal", context: "Context", deliverable: "Deliverable", acceptance: "Acceptance criteria", outOfScope: "Out of scope", human: "Needs you", priority: "Priority", due: "Due date", agent: "Agent", phase: "Phase", column: "Column", output: "Result", dependsOn: "Depends on" };
 const DEFAULT_SETTINGS = { dailyRunCap: 10, autoReview: true, runWhere: "browser" };
 const ARTIFACT_URL = "https://claude.ai/artifact/PrT4ANqepTNYh5qMtN6WLA";
 const REPO_URL = "https://github.com/leoloneumeister-collab/Kanban-Board-with-agents";
@@ -140,7 +140,7 @@ async function moveTicket(id, colId, beforeId) {
 }
 function addDays(iso, n) { const d = parseDate(iso) || startOfToday(); d.setDate(d.getDate() + n); return isoDay(d); }
 async function proposeRecurrence(t) {
-  const next = { title: t.title, agent: t.agent, priority: t.priority, phase: t.phase, goal: t.goal, context: t.context, deliverable: t.deliverable,
+  const next = { title: t.title, agent: t.agent, priority: t.priority, phase: t.phase, goal: t.goal, purpose: t.purpose || "", steps: (t.steps || []).map((x) => ({ ...x, done: false })), context: t.context, deliverable: t.deliverable,
     acceptance: t.acceptance || [], outOfScope: t.outOfScope || "", human: t.human || "", recurrence: "weekly", due: addDays(t.due, 7), repeatOf: t.key || t.id };
   try { await propose(t.id, "recur", { ticket: next }, `This ticket repeats weekly. Next one due ${fmtDate(next.due)}.`); toast("Next week's copy is waiting for your approval on the ticket."); } catch {}
 }
@@ -211,6 +211,16 @@ function parseVerify(md) {
   }
   return out.slice(0, 40);
 }
+function stepsDone(t) { const s = t.steps || []; return { done: s.filter((x) => x.done).length, total: s.length }; }
+function cleanSteps(list) {
+  return (Array.isArray(list) ? list : []).slice(0, 12).map((x) => typeof x === "string" ? { text: x } : x || {})
+    .map((x) => ({ text: String(x.text || "").trim().slice(0, 160), hint: String(x.hint || "").trim().slice(0, 240), done: !!x.done })).filter((x) => x.text);
+}
+function parseStepsText(txt) {
+  return cleanSteps(String(txt || "").split("\n").map((l) => l.replace(/^\s*(\d+[.)]|[-*•])\s*/, "").trim()).filter(Boolean)
+    .map((l) => { const m = l.split(/\s+[—–-]\s+|:\s+/); return { text: m[0], hint: m.slice(1).join(" — ") }; }));
+}
+function stepsToText(list) { return (list || []).map((s) => s.hint ? `${s.text} — ${s.hint}` : s.text).join("\n"); }
 function verifyOpen(t) { return (t.verify || []).filter((v) => !v.checked).length; }
 
 /* Daily run cap. */
