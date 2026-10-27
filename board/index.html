@@ -54,6 +54,10 @@
   </section>
 
   <div class="toolbar gutter">
+    <div class="seg" role="group" aria-label="View">
+      <button class="chip" id="view-board" type="button" aria-pressed="true">Board</button>
+      <button class="chip" id="view-calendar" type="button" aria-pressed="false">Calendar</button>
+    </div>
     <div class="chips" id="filters" role="group" aria-label="Filter by agent"></div>
     <span class="spacer"></span>
     <label class="label-sm" for="sort-mode">Order</label>
@@ -64,6 +68,7 @@
       <option value="agent">Agent</option>
     </select>
     <button class="btn" id="select-mode" type="button" aria-pressed="false">Select tickets</button>
+    <button class="btn" id="new-video" type="button">New video</button>
     <button class="btn primary" id="new-ticket" type="button">New ticket</button>
   </div>
   <div class="gutter"><p class="notice" id="notice" hidden></p></div>

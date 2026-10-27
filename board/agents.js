@@ -490,6 +490,11 @@ async function acceptMemoryProposal() {
 
 /* Proposal kinds beyond edit, move and result. */
 window.acceptExtraProposal = async function (id, p) {
+  if (p.kind === "recur") {
+    const key = nextKey();
+    try { await S.db.collection("tickets").doc(key).set({ ...p.data.ticket, key, column: "ready", order: orderFor("ready", key, null), notes: [] }); toast(`${key} added to Ready for agent`); return true; }
+    catch (e) { handleWriteError(e); return false; }
+  }
   if (p.kind !== "subtickets") return false;
   const parent = S.tickets.get(id); if (!parent) return false;
   const made = [];
@@ -509,3 +514,57 @@ window.acceptExtraProposal = async function (id, p) {
   toast(`${made.length} tickets added to Backlog`);
   return true;
 };
+
+/* ---------- workflows ---------- */
+const PIPELINE = [
+  { step: "Script", agent: "script", days: -3, goal: "Write a 20 to 45 second script for this video.", deliverable: "Hook, beat-by-beat script, on-screen text, and the footage needed for each beat.", acceptance: ["Hook in the first 2 seconds", "Readable aloud in under 45 seconds", "Every beat lists the footage needed", "Follows the project memory's angle and tone"] },
+  { step: "Shot list", agent: "production", days: -2, goal: "Turn the approved script into a shot list you can record in one session.", deliverable: "Numbered shot list with location or mission, camera angle, length and capture settings.", acceptance: ["One shot per script beat", "Grouped so recording happens in one session", "Notes which shots need in-game setup"], human: "Record the shots." },
+  { step: "Caption and hashtags", agent: "publishing", days: -1, goal: "Write the caption, cover text and hashtags for each platform.", deliverable: "Cover text, caption and 3 to 5 hashtags for TikTok, YouTube Shorts and Reels.", acceptance: ["Caption fits each platform's limit", "Cover text under 6 words", "No banned or spammy hashtags"] },
+  { step: "Schedule", agent: "publishing", days: 0, goal: "Pick the posting time and prepare the upload checklist.", deliverable: "Posting time per platform with reasoning and a pre-upload checklist.", acceptance: ["Time per platform", "Checklist covers captions, cover, music check"], human: "Upload and post, or send the caption to Buffer." },
+];
+async function createVideoPipeline({ idea, notes, postDate }) {
+  const series = "v-" + Date.now().toString(36);
+  const made = [];
+  for (const [i, st] of PIPELINE.entries()) {
+    const key = nextKey(i);
+    const data = {
+      key, title: `${st.step}: ${idea}`, agent: st.agent, priority: "P2", phase: postDate && postDate >= "2026-11-19" ? (postDate <= "2026-11-26" ? "Launch week" : "Post-launch") : "Pre-launch",
+      due: postDate ? addDays(postDate, st.days) : "", goal: st.goal, deliverable: st.deliverable, acceptance: st.acceptance,
+      context: [`Video idea: ${idea}`, notes, postDate ? `Planned post date: ${postDate}.` : ""].filter(Boolean).join("\n\n"),
+      outOfScope: "", human: st.human || "", dependsOn: made.slice(-1), series, column: "review", order: orderFor("review", key, null) + i, notes: [],
+    };
+    try { await S.db.collection("tickets").doc(key).set(data); made.push(key); } catch (e) { handleWriteError(e); break; }
+  }
+  if (made.length) toast(`${made.length} linked tickets added to Your review`);
+  return made;
+}
+
+/* ---------- Buffer hand-off: creates an idea (a draft), never a post ---------- */
+function parsePayload(r) {
+  if (r && r.payload && typeof r.payload === "object") return r.payload;
+  const text = r && r.content && r.content[0] && r.content[0].text;
+  if (typeof text === "string") { const cut = text.indexOf("}{"); try { return JSON.parse(cut > 0 ? text.slice(0, cut + 1) : text); } catch {} }
+  return null;
+}
+async function bufferOrg() {
+  const r = await S.mcp.callTool("Buffer", "get_account", {}, { cache: false });
+  const acct = parsePayload(r) || {};
+  const org = (acct.organizations || [])[0];
+  if (!org) throw { code: "tool_error", message: "No Buffer organization found." };
+  return org;
+}
+async function sendToBuffer(t, draft) {
+  try {
+    const org = await bufferOrg();
+    const content = { title: draft.title.slice(0, 200), text: draft.text.slice(0, 5000), services: draft.services };
+    if (draft.date) content.date = new Date(draft.date + "T12:00:00").toISOString().replace(/\.\d{3}Z$/, "Z");
+    await S.mcp.callTool("Buffer", "create_idea", { organizationId: org.id, content }, { cache: false });
+    await write(t.id, { buffer: { ideaAt: new Date().toISOString(), org: org.name || "" } });
+    addEvent(t.id, `Saved as a Buffer idea in ${org.name || "your Buffer organization"}. Nothing was posted.`);
+    toast(`Saved as an idea in Buffer (${org.name || "your organization"})`);
+    return true;
+  } catch (e) {
+    toast(e && e.code === "server_not_connected" ? "Buffer isn't connected. Add it in claude.ai connectors, then try again." : mcpError(e));
+    return false;
+  }
+}

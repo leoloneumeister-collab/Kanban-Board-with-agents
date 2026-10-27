@@ -71,7 +71,7 @@ function renderPlan() {
   $("plan-age").textContent = S.plan.at ? `Updated ${ago(S.plan.at)}` : "";
   const next = (S.plan.next || []).filter((n) => n && n.key);
   const sugg = (S.plan.suggestions || []).filter((s) => s && s.key && !s.applied && !s.dismissed);
-  body.replaceChildren(
+  body.replaceChildren(...[
     el("p", { class: "plan-summary", text: S.plan.summary || "" }),
     S.plan.order && !S.plan.orderApplied && S.canWrite ? el("div", { class: "proposal-inline" },
       el("span", { text: "Claude proposes a new order for the columns." }),
@@ -83,10 +83,10 @@ function renderPlan() {
       el("ul", { class: "sugg-list" }, sugg.map((s) => el("li", {}, keyBtn(s.key), el("span", { class: "why", text: suggestionText(s) }),
         S.canWrite ? el("span", { class: "actions" },
           el("button", { class: "btn sm", type: "button", text: "Apply", onclick: () => applySuggestion(s) }),
-          el("button", { class: "btn sm", type: "button", text: "Dismiss", onclick: () => markSuggestion(s, "dismissed") })) : null)))) : null);
+          el("button", { class: "btn sm", type: "button", text: "Dismiss", onclick: () => markSuggestion(s, "dismissed") })) : null)))) : null].filter(Boolean));
 }
 function suggestionText(s) {
-  const what = s.action === "move" ? `Move to ${colName(s.to)}` : s.action === "priority" ? `Set priority ${s.to}` : s.action === "due" ? `Change due date to ${fmtDate(s.to)}` : "";
+  const what = s.action === "move" ? `Move to ${colName(s.to)}` : s.action === "priority" ? `Set priority ${s.to}` : s.action === "due" ? `Change due date to ${fmtDate(s.to)}` : s.action === "depends" ? `Wait for ${s.to}` : "";
   return [what, s.why].filter(Boolean).join(". ");
 }
 function renderMemory() {
@@ -119,11 +119,11 @@ function renderMemory() {
   } else {
     const filled = MEMORY_FIELDS.filter(([k]) => m[k]);
     parts.push(filled.length
-      ? el("dl", { class: "memory-list" }, filled.map(([k, label]) => [el("dt", { text: label }), el("dd", { text: m[k] })]))
+      ? el("dl", { class: "memory-list" }, filled.flatMap(([k, label]) => [el("dt", { text: label }), el("dd", { text: m[k] })]))
       : el("p", { class: "muted", style: "margin:0", text: "Every agent reads this before it works. Fill it in once you've picked your angle in GTA-01, or approve a research result and let Claude propose it." }),
       S.canWrite ? el("div", {}, el("button", { class: "btn sm", type: "button", text: filled.length ? "Edit memory" : "Fill in memory", onclick: () => { S.memoryEditing = true; renderMemory(); } })) : null);
   }
-  box.replaceChildren(...parts);
+  box.replaceChildren(...parts.filter(Boolean));
 }
 function renderSettings() {
   const box = $("settings-body"); if (!box) return;
@@ -145,7 +145,45 @@ function renderSettings() {
 }
 
 /* ---------- board ---------- */
+function renderCalendar() {
+  const box = $("board"); box.replaceChildren(); box.style.display = "block";
+  const start = startOfToday(); start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+  const end = new Date(2026, 11, 13); const minEnd = new Date(start); minEnd.setDate(minEnd.getDate() + 41);
+  const last = end > minEnd ? end : minEnd;
+  const shown = [...S.tickets.values()].filter((t) => S.filter === "all" || t.agent === S.filter);
+  const byDay = new Map();
+  for (const t of shown) if (t.due) { if (!byDay.has(t.due)) byDay.set(t.due, []); byDay.get(t.due).push(t); }
+  const today = todayISO(), launch = isoDay(LAUNCH);
+  const grid = el("div", { class: "cal-grid", role: "grid", "aria-label": "Tickets by due date" },
+    ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => el("div", { class: "cal-dow", text: d })));
+  for (const d = new Date(start); d <= last; d.setDate(d.getDate() + 1)) {
+    const iso = isoDay(d);
+    const items = (byDay.get(iso) || []).sort((a, b) => (PRIO_RANK[a.priority] || 9) - (PRIO_RANK[b.priority] || 9));
+    const cell = el("div", { class: "cal-day" + (iso < today ? " past" : "") + (iso === today ? " today" : "") + (iso === launch ? " launch" : ""), "data-day": iso },
+      el("div", { class: "cal-date" }, el("span", { text: d.getDate() === 1 || iso === isoDay(start) ? d.toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : String(d.getDate()) }),
+        iso === launch ? el("span", { class: "cal-tag", text: "GTA 6 launch" }) : iso === today ? el("span", { class: "cal-tag muted", text: "Today" }) : null),
+      items.map((t) => {
+        const chip = el("button", { class: "cal-item" + (t.column === "done" ? " done" : ""), type: "button", draggable: S.canWrite ? "true" : null, style: `--agent-color:${(AGENTS[t.agent] || {}).color || "var(--muted)"}`,
+          title: `${t.key || t.id} · ${colName(t.column)}`, onclick: () => openTicket(t.id) }, el("span", { class: "label-sm", text: t.key || t.id }), " ", t.title);
+        chip.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", t.id); e.dataTransfer.effectAllowed = "move"; });
+        return chip;
+      }));
+    cell.addEventListener("dragover", (e) => { if (S.canWrite) { e.preventDefault(); cell.classList.add("over"); } });
+    cell.addEventListener("dragleave", () => cell.classList.remove("over"));
+    cell.addEventListener("drop", (e) => {
+      e.preventDefault(); cell.classList.remove("over");
+      const t = S.tickets.get(e.dataTransfer.getData("text/plain"));
+      if (t && t.due !== iso) applyChange(t.id, { due: iso }, "Before rescheduling on the calendar", `${t.key || t.id} now due ${fmtDate(iso)}`);
+    });
+    grid.append(cell);
+  }
+  const undated = shown.filter((t) => !t.due && t.column !== "done");
+  box.append(el("div", { class: "cal-scroll" }, grid),
+    undated.length ? el("div", { class: "section", style: "margin-top:14px" }, el("h4", { text: "No due date" }),
+      el("div", { class: "chips" }, undated.map((t) => el("button", { class: "chip", type: "button", onclick: () => openTicket(t.id) }, `${t.key || t.id} ${t.title}`)))) : null);
+}
 function renderBoard() {
+  if (S.view === "calendar") return renderCalendar();
   const board = $("board"); board.replaceChildren();
   if (S.loaded && S.tickets.size === 0) {
     board.style.display = "block";
@@ -239,13 +277,14 @@ function closeDialog() { $("dialog").close(); }
 function renderDialog() {
   const box = $("dlg");
   if (S.openId === "__new") { box.replaceChildren(...editForm(null)); return; }
+  if (S.openId === "__video") { box.replaceChildren(...videoForm()); return; }
   const t = S.tickets.get(S.openId);
   if (!t) { closeDialog(); return; }
   if (S.editing) { box.replaceChildren(...editForm(t)); return; }
   const keepScroll = box.querySelector(".dlg-body")?.scrollTop;
   const draft = $("chat-input")?.value;
   const parts = S.tab === "chat" ? chatTab(t) : S.tab === "result" ? resultTab(t) : S.tab === "history" ? historyTab(t) : briefTab(t);
-  box.replaceChildren(dialogHead(t), ...parts);
+  box.replaceChildren(dialogHead(t), ...parts.filter(Boolean));
   if (draft != null && $("chat-input")) $("chat-input").value = draft;
   const body = box.querySelector(".dlg-body");
   if (body) body.scrollTop = S.tab === "chat" ? body.scrollHeight : (keepScroll || 0);
@@ -279,8 +318,9 @@ function valueText(k, v) {
   return v === "" || v == null ? "(empty)" : String(v);
 }
 function proposalCard(t, p) {
-  const title = p.kind === "edit" ? "Claude proposes changes" : p.kind === "move" ? "Claude proposes a move" : p.kind === "result" ? "Claude proposes a result" : p.kind === "subtickets" ? `Claude proposes ${(p.data.tickets || []).length} new tickets` : "Claude proposes";
+  const title = p.kind === "edit" ? "Claude proposes changes" : p.kind === "move" ? "Claude proposes a move" : p.kind === "result" ? "Claude proposes a result" : p.kind === "subtickets" ? `Claude proposes ${(p.data.tickets || []).length} new tickets` : p.kind === "recur" ? "Create next week's copy" : "Claude proposes";
   const rows = p.kind === "result" ? [el("div", { class: "diff-after" }, mdNode(p.data.output))]
+    : p.kind === "recur" ? [el("div", { class: "diff-after", text: `${p.data.ticket.title}\nDue ${fmtDate(p.data.ticket.due)} · goes straight to Ready for agent` })]
     : p.kind === "subtickets" ? [el("ol", { class: "sub-list" }, (p.data.tickets || []).map((x, i) => el("li", {},
         el("strong", { text: x.title }), el("span", { class: "muted", text: ` · ${(AGENTS[x.agent] || {}).name || x.agent}${x.due ? " · " + fmtDate(x.due) : ""}${x.after && x.after.length ? " · after " + x.after.map((n) => "#" + (n + 1)).join(", ") : ""}` }),
         el("div", { class: "small", text: x.goal }))))]
@@ -375,6 +415,53 @@ function verifyList(t) {
         } }), el("span", { text: v.text }));
     }));
 }
+function bufferBox(t) {
+  if (!S.mcp || t.agent !== "publishing" || !S.canWrite) return null;
+  const d = S.bufferDraft && S.bufferDraft.id === t.id ? S.bufferDraft : null;
+  if (!d) return el("div", { class: "proposal-inline" },
+    el("span", { text: t.buffer ? `Saved to Buffer as an idea ${ago(t.buffer.ideaAt)}.` : "Ready to post? Save the caption to Buffer as an idea. Nothing gets posted or scheduled." }),
+    el("button", { class: "btn sm", type: "button", text: t.buffer ? "Save another idea" : "Prepare Buffer idea", onclick: () => {
+      S.bufferDraft = { id: t.id, title: t.title.replace(/^Caption and hashtags:\s*/i, ""), text: t.output.slice(0, 2200), services: ["tiktok", "youtube", "instagram"], date: t.due || "" }; renderDialog();
+    } }));
+  const title = el("input", { id: "buf-title", type: "text" }); title.value = d.title;
+  const text = el("textarea", { id: "buf-text", rows: "8" }); text.value = d.text;
+  const date = el("input", { id: "buf-date", type: "date" }); date.value = d.date;
+  const svc = [["tiktok", "TikTok"], ["youtube", "YouTube"], ["instagram", "Instagram"]].map(([v, label]) =>
+    el("label", { class: "dep-item", for: "buf-" + v }, el("input", { type: "checkbox", id: "buf-" + v, value: v, checked: d.services.includes(v) }), el("span", { text: label })));
+  return el("div", { class: "proposal" },
+    el("div", { class: "proposal-head" }, el("strong", { text: "Buffer idea preview" }), el("span", { class: "muted", text: "Edit it down to the caption you want" })),
+    field("Title", title), field("Text", text), el("div", { class: "grid-2" }, field("Target date", date), el("div", { class: "field" }, el("span", { class: "label-sm", text: "Platforms" }), el("div", { class: "actions" }, svc))),
+    el("div", { class: "actions" },
+      el("button", { class: "btn sm primary", type: "button", text: "Save idea to Buffer", onclick: async (e) => {
+        const services = svc.map((l) => l.querySelector("input")).filter((i) => i.checked).map((i) => i.value);
+        if (!text.value.trim()) { toast("Add the caption text first."); return; }
+        e.currentTarget.disabled = true;
+        if (await sendToBuffer(t, { title: title.value.trim() || t.title, text: text.value.trim(), services, date: date.value })) { S.bufferDraft = null; renderDialog(); }
+        else e.currentTarget.disabled = false;
+      } }),
+      el("button", { class: "btn sm", type: "button", text: "Cancel", onclick: () => { S.bufferDraft = null; renderDialog(); } })));
+}
+function videoForm() {
+  const idea = el("input", { id: "v-idea", type: "text", placeholder: "For example: 5 Vice City spots that look real" });
+  const notes = el("textarea", { id: "v-notes", rows: "3", placeholder: "Anything the agents should know: hook idea, footage you have, reference video" });
+  const date = el("input", { id: "v-date", type: "date" });
+  const err = el("p", { class: "notice", hidden: true });
+  return [
+    el("div", { class: "dlg-head", style: "padding-bottom:12px" },
+      el("div", { class: "card-top" }, el("span", { text: "New video" }), el("button", { class: "btn sm close", type: "button", text: "Cancel", onclick: closeDialog })),
+      el("h3", { id: "dlg-title", text: "One idea, four linked tickets" })),
+    el("div", { class: "dlg-body" }, err,
+      el("p", { class: "muted", style: "margin:0", text: "Creates Script → Shot list → Caption and hashtags → Schedule. Each waits for the one before it, gets its approved result, and is due in the days before your post date." }),
+      field("Video idea", idea), field("Notes for the agents", notes), field("Post date", date),
+      el("ol", { class: "sub-list" }, PIPELINE.map((p) => el("li", {}, el("strong", { text: p.step }), el("span", { class: "muted", text: ` · ${AGENTS[p.agent].name}${p.days ? ` · ${-p.days} day${p.days === -1 ? "" : "s"} before posting` : " · post day"}` }))))),
+    el("div", { class: "dlg-foot" }, el("button", { class: "btn primary", type: "button", text: "Create 4 tickets", onclick: async (e) => {
+      if (!idea.value.trim()) { err.textContent = "Describe the video idea first."; err.hidden = false; idea.focus(); return; }
+      e.currentTarget.disabled = true;
+      const made = await createVideoPipeline({ idea: idea.value.trim(), notes: notes.value.trim(), postDate: date.value });
+      if (made.length) openTicket(made[0]); else e.currentTarget.disabled = false;
+    } })),
+  ];
+}
 function scorecard(t) {
   const r = t.review; if (!r || !r.criteria) return null;
   const met = r.criteria.filter((c) => c.met).length;
@@ -392,7 +479,7 @@ function resultTab(t) {
       el("div", { class: "live", id: "live-output", text: run.text || "Thinking. The first words can take up to a minute." }));
   } else if (t.output) {
     body.append(el("div", { class: "result-meta" }, el("span", { text: `Saved ${ago(t.outputAt)}` }), t.run && t.run.via === "chat" ? el("span", { text: "from the chat" }) : null),
-      scorecard(t), verifyList(t), mdNode(t.output));
+      scorecard(t), verifyList(t), bufferBox(t), mdNode(t.output));
   } else {
     body.append(el("div", { class: "chat-empty" },
       el("p", { style: "margin:0", text: "No result yet. Run the agent to have Claude do this ticket, using the brief and everything you've said in the chat." }),
@@ -452,6 +539,7 @@ function editForm(t) {
     due: inp("f-due", v.due, "date"), goal: area("f-goal", v.goal, 2), context: area("f-context", v.context, 4),
     deliverable: area("f-deliverable", v.deliverable, 3), acceptance: area("f-acceptance", (v.acceptance || []).join("\n"), 4),
     outOfScope: area("f-oos", v.outOfScope, 2), human: area("f-human", v.human, 2),
+    recurrence: sel("f-recur", [["", "Doesn't repeat"], ["weekly", "Every week"]], v.recurrence || ""),
   };
   const depBoxes = [...S.tickets.values()].filter((x) => !t || x.id !== t.id).sort((a, b) => (a.key || a.id).localeCompare(b.key || b.id))
     .map((x) => { const key = x.key || x.id; return el("label", { class: "dep-item", for: "dep-" + key }, el("input", { type: "checkbox", id: "dep-" + key, value: key, checked: (v.dependsOn || []).includes(key) }), el("span", { text: `${key} ${x.title}` })); });
@@ -462,7 +550,7 @@ function editForm(t) {
     const data = { title, agent: f.agent.value, priority: f.priority.value, phase: f.phase.value, due: f.due.value,
       goal: f.goal.value.trim(), context: f.context.value.trim(), deliverable: f.deliverable.value.trim(),
       acceptance: f.acceptance.value.split("\n").map((s) => s.trim()).filter(Boolean), outOfScope: f.outOfScope.value.trim(), human: f.human.value.trim(),
-      dependsOn: depBoxes.map((l) => l.querySelector("input")).filter((i) => i.checked).map((i) => i.value) };
+      dependsOn: depBoxes.map((l) => l.querySelector("input")).filter((i) => i.checked).map((i) => i.value), recurrence: f.recurrence.value };
     try {
       if (t) { if (await applyChange(t.id, data, "Before your edit", "Ticket saved")) { S.editing = false; renderDialog(); } }
       else {
@@ -481,7 +569,7 @@ function editForm(t) {
       el("button", { class: "btn sm close", type: "button", text: "Cancel", onclick: () => { if (t) { S.editing = false; renderDialog(); } else closeDialog(); } })),
     el("h3", { id: "dlg-title", text: t ? t.title : "Write a ticket an agent can act on" }));
   const body = el("div", { class: "dlg-body" }, err, field("Title", f.title),
-    el("div", { class: "grid-2" }, field("Agent", f.agent), field("Priority", f.priority), field("Phase", f.phase), field("Due", f.due)),
+    el("div", { class: "grid-2" }, field("Agent", f.agent), field("Priority", f.priority), field("Phase", f.phase), field("Due", f.due), field("Repeats", f.recurrence)),
     field("Goal: one sentence on the outcome", f.goal), field("Context: what the agent needs to know", f.context),
     field("Deliverable: what it hands back", f.deliverable), field("Acceptance criteria: one per line", f.acceptance),
     field("Out of scope", f.outOfScope), field("Needs you: what only you can do", f.human),
@@ -493,11 +581,6 @@ function editForm(t) {
     confirmBox);
   return [head, body, foot];
 }
-function nextKey() {
-  let max = 0;
-  for (const t of S.tickets.values()) { const m = /^GTA-(\d+)$/.exec(t.key || t.id); if (m) max = Math.max(max, Number(m[1])); }
-  return "GTA-" + String(max + 1).padStart(2, "0");
-}
 
 /* ---------- wiring and boot ---------- */
 $("dialog").addEventListener("close", () => { S.openId = null; S.editing = false; unsubscribeTicket(); });
@@ -507,6 +590,16 @@ $("new-ticket").addEventListener("click", () => {
   unsubscribeTicket(); S.openId = "__new"; S.editing = true; renderDialog(); if (!$("dialog").open) $("dialog").showModal();
 });
 $("sort-mode").addEventListener("change", (e) => { S.sortMode = e.target.value; renderBoard(); });
+$("new-video").addEventListener("click", () => {
+  if (!S.db) { toast("The board can't save right now."); return; }
+  unsubscribeTicket(); S.openId = "__video"; S.editing = false; renderDialog(); if (!$("dialog").open) $("dialog").showModal();
+});
+for (const v of ["board", "calendar"]) $("view-" + v).addEventListener("click", () => {
+  S.view = v; for (const w of ["board", "calendar"]) $("view-" + w).setAttribute("aria-pressed", String(S.view === w));
+  try { localStorage.setItem("gta6-view", v); } catch {}
+  renderBoard();
+});
+try { const v = localStorage.getItem("gta6-view"); if (v === "calendar") { S.view = v; $("view-board").setAttribute("aria-pressed", "false"); $("view-calendar").setAttribute("aria-pressed", "true"); } } catch {}
 $("run-all").addEventListener("click", () => requestRunAll());
 $("run-selected").addEventListener("click", () => { const ids = [...S.selected]; S.selected.clear(); S.selecting = false; renderBoard(); requestRunAll(ids); });
 $("select-mode").addEventListener("click", () => { S.selecting = !S.selecting; if (!S.selecting) S.selected.clear(); renderDeck(); renderBoard(); });

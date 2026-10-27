@@ -43,7 +43,7 @@ const S = {
   messages: [], proposals: [], history: [], subs: [], subFor: null,
   chatCtl: null, chatPending: null, chatBusy: false,
   activeRuns: new Map(), runAllActive: false, stopAll: false, confirmRun: null,
-  mcp: null, cloudStatus: new Map(), selecting: false, selected: new Set(),
+  mcp: null, cloudStatus: new Map(), selecting: false, selected: new Set(), view: "board", bufferDraft: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -134,7 +134,20 @@ async function moveTicket(id, colId, beforeId) {
   const t = S.tickets.get(id); if (!t || !COLUMNS.some((c) => c.id === colId)) return false;
   const order = orderFor(colId, id, beforeId);
   if (t.column === colId && t.order === order) return true;
-  return write(id, { column: colId, order }, t.column === colId ? null : `Moved to ${colName(colId)}`);
+  const ok = await write(id, { column: colId, order }, t.column === colId ? null : `Moved to ${colName(colId)}`);
+  if (ok && colId === "done" && t.column !== "done" && t.recurrence === "weekly") proposeRecurrence(t);
+  return ok;
+}
+function addDays(iso, n) { const d = parseDate(iso) || startOfToday(); d.setDate(d.getDate() + n); return isoDay(d); }
+async function proposeRecurrence(t) {
+  const next = { title: t.title, agent: t.agent, priority: t.priority, phase: t.phase, goal: t.goal, context: t.context, deliverable: t.deliverable,
+    acceptance: t.acceptance || [], outOfScope: t.outOfScope || "", human: t.human || "", recurrence: "weekly", due: addDays(t.due, 7), repeatOf: t.key || t.id };
+  try { await propose(t.id, "recur", { ticket: next }, `This ticket repeats weekly. Next one due ${fmtDate(next.due)}.`); toast("Next week's copy is waiting for your approval on the ticket."); } catch {}
+}
+function nextKey(offset = 0) {
+  let max = 0;
+  for (const t of S.tickets.values()) { const m = /^GTA-(\d+)$/.exec(t.key || t.id); if (m) max = Math.max(max, Number(m[1])); }
+  return "GTA-" + String(max + 1 + offset).padStart(2, "0");
 }
 async function addEvent(id, text) {
   try { await S.db.collection(`tickets/${id}/messages`).add({ role: "event", text, at: new Date().toISOString() }); } catch {}
